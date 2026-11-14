@@ -196,7 +196,8 @@ each system's logo, and you choose with the **F1–F5** keys under the screen. W
 default system starts after a few seconds. The menu can also start Xiegu's original system from
 the radio's internal memory (eMMC); the app changes nothing there.
 
-The app (Windows, macOS, Linux; from **[Releases](../../releases/latest)**, nothing to install)
+The app (Windows, macOS, Linux; from **[Releases](../../releases/latest)**, nothing to install;
+on Windows unpack `Xiegu-Multi-Patcher-Windows.zip` and run `Xiegu Multi Patcher.exe` from the folder)
 speaks English and Polish: pick the language at the top right of its window.
 
 1. **+ From the internet…** fetches a system's image straight from its authors' GitHub releases
@@ -205,9 +206,17 @@ speaks English and Polish: pick the language at the top right of its window.
 3. The app shows the menu just as the radio will: click a tile, then move it (**← →**), make it
    the default (★), rename it (double-click) or give it a logo of your own.
 4. Choose the time to choose (0–15 s) or **no automatic start** (the radio waits for an F key),
-   and a **shared** or **per-system DATA** partition.
-5. **Write to the card** (it asks for the administrator password, then checks what it wrote),
-   or **Save as an .img file…** for balenaEtcher. Writing erases the whole card.
+   and a **per-system** (the default) or **shared DATA** partition.
+5. **Write to the card** (it asks for the administrator password, then checks what it wrote; the
+   check can be left out or skipped while it runs), or **Save as an .img file…** for balenaEtcher.
+   Writing erases the whole card. What the app is doing, and how long it still takes, is shown at
+   the bottom of its window.
+
+**Settings (DATA).** Each system keeps its settings on its own DATA. **Carry the settings over from
+the old card** copies each system's DATA to the computer before the card is erased and puts it back
+into the same system on the new card, wherever it now stands in the menu. **DATA copies of the card
+in the reader…** saves or restores each system's DATA on its own; **Own DATA copy for the new card…**
+puts a copy of your own (a `.zip` or a folder) on the card being written.
 
 **Extras: Doom.** Classic Doom with [Freedoom](https://freedoom.github.io/)'s maps, sound and OPL3
 music, on the radio's knobs and keys, a USB mouse and keyboard on the HOST port, or Bluetooth ones

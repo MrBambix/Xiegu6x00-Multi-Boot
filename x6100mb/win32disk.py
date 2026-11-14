@@ -11,7 +11,8 @@ from ctypes import wintypes
 GENERIC_READ, GENERIC_WRITE = 0x80000000, 0x40000000
 SHARE_RW, OPEN_EXISTING = 3, 3
 IOCTL_STORAGE_QUERY_PROPERTY = 0x2D1400
-IOCTL_DISK_GET_LENGTH_INFO = 0x7405C
+IOCTL_DISK_GET_LENGTH_INFO = 0x7405C            # needs the disk opened for reading
+IOCTL_DISK_GET_DRIVE_GEOMETRY_EX = 0x700A0      # any access: the size at offset 24
 IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x560000
 IOCTL_DISK_UPDATE_PROPERTIES = 0x70140
 FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME, FSCTL_DISMOUNT_VOLUME = 0x90018, 0x9001C, 0x90020
@@ -76,9 +77,18 @@ def describe(n):
         return None
     try:
         raw = _ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, struct.pack("<II4x", 0, 0), 1024)
-        size = _ioctl(h, IOCTL_DISK_GET_LENGTH_INFO, outsize=8)
+        geo = _ioctl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, outsize=256)
     finally:
         _k.CloseHandle(h)
+    size = struct.unpack_from("<q", geo, 24)[0] if geo and len(geo) >= 32 else 0
+    if not size:                                  # the other way, with the disk open for reading
+        hr = _open("\\\\.\\PhysicalDrive%d" % n, GENERIC_READ)
+        if hr:
+            try:
+                ln = _ioctl(hr, IOCTL_DISK_GET_LENGTH_INFO, outsize=8)
+                size = struct.unpack("<q", ln)[0] if ln else 0
+            finally:
+                _k.CloseHandle(hr)
     if not raw or len(raw) < 32:
         return None
 
@@ -90,7 +100,7 @@ def describe(n):
     vendor, product = text(struct.unpack_from("<I", raw, 12)[0]), text(struct.unpack_from("<I", raw, 16)[0])
     bus = struct.unpack_from("<I", raw, 28)[0]
     return {"number": n, "name": " ".join(x for x in (vendor, product) if x) or "Disk %d" % n,
-            "size": struct.unpack("<q", size)[0] if size else 0, "bus": BUS.get(bus, str(bus)),
+            "size": size, "bus": BUS.get(bus, str(bus)),
             "removable": removable or bus in BUS}
 
 

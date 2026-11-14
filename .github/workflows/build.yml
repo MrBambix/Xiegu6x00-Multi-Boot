@@ -106,6 +106,8 @@ jobs:
           assert sysd, "the system disk was not found"
           for n in range(4):
               print(n, win32disk.describe(n))
+          d0 = win32disk.describe(min(sysd))
+          assert d0 and d0["size"] > 10**9, "a disk's size was not read: %r" % (d0,)
           cards = devices.list_cards()
           print("cards:", cards)
           assert all(int(c["path"].rsplit("e", 1)[1]) not in sysd for c in cards)
