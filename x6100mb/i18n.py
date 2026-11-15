@@ -454,7 +454,7 @@ EN = {
     "Emulator NES potrzebuje na karcie także systemu z obrazu (np. OpenX6X00): uruchamia się z jego jądrem":
         "The NES emulator needs a system from an image on the card too (e.g. OpenX6X00): it starts with its kernel",
     "ta wersja aplikacji nie ma w sobie emulatora NES": "this build of the app has no NES emulator in it",
-    "# Emulator NES: glosnosc 0..200 (%)": "# NES emulator: volume 0..200 (%)",
+    "# Emulator NES: glosnosc gry 0..300 (%)": "# NES emulator: the game's volume 0..300 (%)",
     "# Glosnosc glosnika radia (AF) 0..55": "# The radio's speaker (AF) volume 0..55",
     "# Wycisz odbiornik radia (szum w tle); 0: zostaw jak byl": "# Mute the radio's receiver (the background hiss); 0: leave it as it was",
     "# Obraz: 2x (ostry, 512x448) albo 4:3 (640x480)": "# Picture: 2x (sharp, 512x448) or 4:3 (640x480)",
@@ -513,9 +513,10 @@ i stany) w NES/SAVES. Gry z dyskietek FDS potrzebują NES/BIOS/disksys.rom.
 Emulator też uruchamia się z jądrem PIERWSZEGO systemu z obrazu na liście.
 
 Sterowanie radiem (gracz 1)
-  BAND ▲/▼, DFN, DFL: krzyżak    F1: B    F2 lub PTT: A    F3: Select    F4 lub MFK: Start
-  F5: A turbo    Gałka VFO: lewo/prawo    Gałka VOL: góra/dół    GEN lub VOL: menu emulatora
-  W menu: gałki i krzyżak wybierają, F2 zatwierdza, F1 wraca. POWER: wyłączenie radia.
+  BAND ▲/▼, DFN, DFL: krzyżak    F1: B    F2 lub PTT: A    F3: Select    F4: Start
+  F5: A turbo    Gałka VFO: lewo/prawo    Gałka VOL: głośnik radia
+  Wciśnięcie MFK lub GEN: menu emulatora. W menu: gałki MFK/VFO i krzyżak wybierają,
+  MFK lub F2 zatwierdza, F1 lub GEN wraca. POWER: wyłączenie radia.
 
 Klawiatura, mysz, pady (USB i Bluetooth)
   Klawiatura: strzałki lub WASD, X/K = A, Z/J = B, Enter = Start, Shift lub spacja = Select,
@@ -584,9 +585,10 @@ states) go to NES/SAVES. FDS disk games need NES/BIOS/disksys.rom.
 The emulator, too, starts with the kernel of the FIRST system from an image on the list.
 
 The radio's controls (player 1)
-  BAND ▲/▼, DFN, DFL: the d-pad    F1: B    F2 or PTT: A    F3: Select    F4 or MFK: Start
-  F5: turbo A    VFO knob: left/right    VOL knob: up/down    GEN or VOL: the emulator's menu
-  In the menus: the knobs and the d-pad choose, F2 confirms, F1 goes back. POWER: radio off.
+  BAND ▲/▼, DFN, DFL: the d-pad    F1: B    F2 or PTT: A    F3: Select    F4: Start
+  F5: turbo A    VFO knob: left/right    VOL knob: the radio's speaker
+  MFK pressed or GEN: the emulator's menu. In the menus: the MFK/VFO knobs and the d-pad
+  choose, MFK or F2 confirms, F1 or GEN goes back. POWER: radio off.
 
 Keyboard, mouse, pads (USB and Bluetooth)
   Keyboard: arrows or WASD, X/K = A, Z/J = B, Enter = Start, Shift or Space = Select,

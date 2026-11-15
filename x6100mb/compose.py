@@ -499,7 +499,7 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
     if nes:
         # The emulator's settings, read at its start (extras/nes/nes_x6100.c), and the games
         fat.add_file("nes.txt", (
-            t("# Emulator NES: glosnosc 0..200 (%)") + "\r\nvolume=100\r\n" +
+            t("# Emulator NES: glosnosc gry 0..300 (%)") + "\r\nvolume=150\r\n" +
             t("# Glosnosc glosnika radia (AF) 0..55") + "\r\nrxvol=20\r\n" +
             t("# Wycisz odbiornik radia (szum w tle); 0: zostaw jak byl") + "\r\nrxmute=0\r\n" +
             t("# Wyjscie dzwieku procesora do plyty radia 0..63") + "\r\nheadphone=47\r\n" +

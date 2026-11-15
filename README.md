@@ -122,9 +122,9 @@ na partycji `BOOT` karty (widać ją na każdym komputerze). Podfoldery działaj
 (baterie i stany) trafiają do `NES/SAVES`, gry z dyskietek FDS potrzebują `NES/BIOS/disksys.rom`.
 
 **Sterowanie radiem (gracz 1):** BAND ▲/▼, DFN i DFL to krzyżak, F1 to B, F2 lub PTT to A,
-F3 Select, F4 lub wciśnięty MFK to Start, F5 A turbo. Gałka VFO lewo/prawo, gałka VOL góra/dół.
-GEN otwiera menu emulatora (zapis i odczyt stanu, reset, przyciski pada, parowanie Bluetooth,
-lista gier, restart do menu startowego, wyłączenie). POWER wyłącza radio.
+F3 Select, F4 Start, F5 A turbo. Gałka VFO lewo/prawo, gałka VOL to głośnik radia.
+Wciśnięty MFK albo GEN otwiera menu emulatora (po menu chodzi się gałką MFK) (zapis i odczyt stanu, reset, przyciski pada, parowanie Bluetooth,
+wyjście z gry, głośność, dźwięk radia, wyłączenie). POWER wyłącza radio.
 
 **Klawiatura, mysz, pady (USB i Bluetooth):** klawiatura: strzałki lub WASD, X/K = A, Z/J = B,
 Enter = Start, Shift lub spacja = Select, C/V = turbo, Esc = menu, F2/F4 = szybki zapis/odczyt.

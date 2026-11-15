@@ -79,6 +79,7 @@ enum {
 	J_DOWN = RETRO_DEVICE_ID_JOYPAD_DOWN, J_LEFT = RETRO_DEVICE_ID_JOYPAD_LEFT,
 	J_RIGHT = RETRO_DEVICE_ID_JOYPAD_RIGHT, J_A = RETRO_DEVICE_ID_JOYPAD_A, J_X = RETRO_DEVICE_ID_JOYPAD_X,
 	J_MENU = 16,                      /* ours: the emulator's menu */
+	J_MFK = 17,                       /* the MFK knob pressed: the menu in a game, OK in a menu */
 };
 #define BIT(j) (1u << (j))
 
@@ -829,6 +830,7 @@ static uint32_t prev_nav_bits;
 static uint32_t repeat_at;
 static bool quick_save, quick_load;
 static int menu_mouse;                      /* the mouse's way up and down, for the menus */
+static int menu_depth;                      /* a menu or a message on the screen (MFK pressed: OK) */
 
 static char note_text[96];                  /* a word over the game for a while */
 static uint32_t note_until;
@@ -885,9 +887,8 @@ static int radio_key(unsigned code)
 	case HAPPY(15): return J_SELECT;   /* F3 */
 	case HAPPY(19): return J_START;    /* F4 */
 	case HAPPY(20): return J_X;        /* F5: A turbo */
-	case HAPPY(27): return J_START;    /* MFK pressed */
+	case HAPPY(27): return J_MFK;      /* MFK pressed: the menu (it is the knob the menus turn on) */
 	case HAPPY(1):  return J_MENU;     /* GEN */
-	case HAPPY(21): return J_MENU;     /* VOL pressed */
 	default:        return -1;
 	}
 }
@@ -1327,8 +1328,8 @@ static int vol_steps, af_steps;              /* knob turns for the game to take 
 
 static void knob(int axis, int value)
 {
-	if (axis == 1) {                          /* VOL: the radio's speaker, always (not the menus') */
-		af_steps += value;
+	if (axis == 1) {                          /* VOL: the radio's speaker, always (not the menus'); */
+		af_steps -= value;                    /* its encoder counts the other way: right is louder */
 		return;
 	}
 	if (axis == 0)                            /* VFO, MFK: the menus */
@@ -1506,6 +1507,12 @@ static void poll_input(void)
 	if (pressed & BIT(J_MENU)) {
 		nav_push(N_MENU);
 		want_menu = true;             /* a press, not a key still held from a menu */
+	}
+	if (pressed & BIT(J_MFK)) {
+		if (menu_depth)
+			nav_push(N_OK);
+		else
+			want_menu = true;
 	}
 	uint32_t dirs = nb & (BIT(J_UP) | BIT(J_DOWN));
 	if (pressed & dirs)
@@ -1731,6 +1738,7 @@ static int menu_ex(const char *title, const char *const *items, int n, int sel, 
 	bool dirty = true;
 	uint32_t drawn = 0, moved = 0;
 	input_settle();
+	menu_depth++;
 	for (;;) {
 		poll_input();
 		int old = v.sel, old_top = v.top;
@@ -1738,6 +1746,7 @@ static int menu_ex(const char *title, const char *const *items, int n, int sel, 
 		want_menu = false;
 		if (c != -1) {
 			input_settle();
+			menu_depth--;
 			return c == -2 ? -1 : c;
 		}
 		if (dirty && !side && v.sel != old) {     /* only the two lines that changed */
@@ -1757,8 +1766,10 @@ static int menu_ex(const char *title, const char *const *items, int n, int sel, 
 		} else {
 			move_long(&v, &moved);
 		}
-		if (test_mode && !keys_scripted())
+		if (test_mode && !keys_scripted()) {
+			menu_depth--;
 			return v.sel;
+		}
 		if (menu_tick)
 			menu_tick();
 		idle(10);
@@ -1834,6 +1845,7 @@ static void message(const char *title, const char *const *lines, int n, unsigned
 	if (test_mode && !keys_scripted())
 		return;
 	input_settle();
+	menu_depth++;
 	uint32_t until = now_ms() + ms;
 	for (;;) {
 		poll_input();
@@ -1842,11 +1854,12 @@ static void message(const char *title, const char *const *lines, int n, unsigned
 			break;
 		idle(10);
 	}
+	menu_depth--;
 	input_settle();
 }
 
-static const char *HINT_LIST_PL = "F2 / A: wybierz  F1 / B: wstecz  GEN: menu";
-static const char *HINT_LIST_EN = "F2 / A: choose  F1 / B: back  GEN: menu";
+static const char *HINT_LIST_PL = "MFK / F2 / A: wybierz  F1 / B / GEN: wstecz";
+static const char *HINT_LIST_EN = "MFK / F2 / A: choose  F1 / B / GEN: back";
 
 /* ------------------------------------------------------------------------------------------ */
 /* Sound                                                                                      */
@@ -3312,6 +3325,7 @@ static void bt_scan(void)
 	                      false, NULL, false};
 	uint32_t drawn = 0;
 	input_settle();
+	menu_depth++;
 	for (;;) {
 		poll_input();
 		unsigned el = (now_ms() - start) / 1000;
@@ -3369,6 +3383,7 @@ static void bt_scan(void)
 			break;
 		idle(20);
 	}
+	menu_depth--;
 	if (scanning)
 		bt_send("scan off");
 }
@@ -3710,8 +3725,8 @@ static void help(void)
 	const char *pl[] = {
 		"#Radio",
 		"BAND ▲▼, DFN, DFL: krzyżak · F1: B · F2, PTT: A · F5: A turbo",
-		"F3: Select · F4, MFK: Start · gałka VFO: lewo/prawo · GEN: menu",
-		"gałka VOL: głośnik radia · gałka MFK: menu",
+		"F3: Select · F4: Start · gałka VFO: lewo/prawo",
+		"MFK (wciśnięcie) lub GEN: menu · gałka VOL: głośnik radia",
 		"#Klawiatura",
 		"strzałki · X: A · Z: B · Enter: Start · Shift: Select · C/V: turbo",
 		"Esc: menu · F2: zapisz stan · F4: wczytaj stan",
@@ -3722,8 +3737,8 @@ static void help(void)
 	const char *en[] = {
 		"#Radio",
 		"BAND ▲▼, DFN, DFL: d-pad · F1: B · F2, PTT: A · F5: turbo A",
-		"F3: Select · F4, MFK: Start · VFO knob: left/right · GEN: menu",
-		"VOL knob: the radio's speaker · MFK knob: the menus",
+		"F3: Select · F4: Start · VFO knob: left/right",
+		"MFK (pressed) or GEN: menu · VOL knob: the radio's speaker",
 		"#Keyboard",
 		"arrows · X: A · Z: B · Enter: Start · Shift: Select · C/V: turbo",
 		"Esc: menu · F2: save state · F4: load state",
@@ -4086,7 +4101,7 @@ static void read_settings(void)
 	while (f && fgets(line, sizeof line, f)) {
 		int v;
 		char s[16];
-		if (sscanf(line, " volume = %d", &v) == 1 && v >= 0 && v <= 200) set_volume = v;
+		if (sscanf(line, " volume = %d", &v) == 1 && v >= 0 && v <= 300) set_volume = v;
 		else if (sscanf(line, " rxvol = %d", &v) == 1) set_rxvol = v;
 		else if (sscanf(line, " rxmute = %d", &v) == 1) set_rxmute = v != 0;
 		else if (sscanf(line, " headphone = %d", &v) == 1) set_headphone = v;
