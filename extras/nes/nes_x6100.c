@@ -111,11 +111,10 @@ static uint32_t now_ms(void)
 /* ------------------------------------------------------------------------------------------ */
 /* Settings: /boot/nes.txt                                                                    */
 /* ------------------------------------------------------------------------------------------ */
-static int set_volume = 100, set_rxvol = 0, set_rxmute = 0, set_headphone = 47, set_record = 1;
-/* The game reaches the speaker through the TX monitor (register 29, X6100Control's monilevel, 0..100):
- * OpenX6X00's radio_vol_refresh notes the monitor still played FT8's tones at AF 0. AF (register 14)
- * is the receiver's: 0 cuts it, so only the game is heard */
-static int set_moni = 70;
+static int set_volume = 100, set_rxvol = 40, set_rxmute = 0, set_headphone = 47, set_record = 1;
+/* The game reaches the speaker through AF (register 14): tried on the radio, the TX monitor
+ * (register 29) carried nothing of it, AF 40 played it well. The monitor is left alone */
+static int set_moni = -1;
 static int set_bluetooth = 1, set_aspect = 0, set_en = 0, set_mouse = 100;
 
 /* The user's words, in Polish or English (lang=en in nes.txt; the app writes it) */
@@ -232,20 +231,18 @@ static bool radio_poweroff(void)
 /* The speaker playing the SoC's sound, as OpenX6X00's AUDIO_PLAY_ON (see extras/doom/x6100_sound.c) */
 static void radio_audio(void)
 {
-	int vol = set_rxvol < 0 || set_rxvol > 55 ? 0 : set_rxvol;
+	int vol = set_rxvol < 0 || set_rxvol > 55 ? 40 : set_rxvol;
 	int fd = open("/dev/i2c-0", O_RDWR);
 	if (fd < 0) {
 		logmsg("sound: /dev/i2c-0: %s", strerror(errno));
 		return;
 	}
-	int moni = set_moni < 0 || set_moni > 100 ? 70 : set_moni;
 	bool ok = base_write(fd, 20, 10u | (10u << 8)) &&
 	          base_write(fd, 12, set_record ? 0x8 : 0) &&
-	          base_write(fd, 14, (uint32_t)vol) &&
-	          base_write(fd, 29, (uint32_t)moni);
+	          base_write(fd, 14, (uint32_t)vol);
 	if (ok && set_rxmute)
 		ok = base_write(fd, 15, 10u << 8);
-	logmsg("sound: radio speaker %s (monitor %d: the game; AF %d: the receiver)", ok ? "set" : "NOT set", moni, vol);
+	logmsg("sound: radio speaker %s (AF %d)", ok ? "set" : "NOT set", vol);
 	close(fd);
 }
 
@@ -270,7 +267,7 @@ static const struct sound_opt sound_opts[SO_N] = {
 	{"rfgain", "RF gain", "RF gain", 5, {"-", "0", "30", "64", "100"}, {-1, 0, 30, 64, 100}},
 	{"headphone", "Wyjście procesora", "The SoC's output", 3, {"47", "55", "63"}, {47, 55, 63}},
 	{"volume", "Głośność gry", "Game volume", 0, {""}, {0}},           /* raw values: set_volume */
-	{"af", "Odbiornik radia (AF, 0: odcięty)", "The receiver (AF, 0: cut)", 0, {""}, {0}},   /* set_rxvol */
+	{"af", "Głośność (AF)", "Volume (AF)", 0, {""}, {0}},                                     /* set_rxvol */
 	{"moni", "Głośność (monitor)", "Volume (monitor)", 0, {""}, {0}},                       /* set_moni */
 };
 static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};   /* the SoC's output 47, as Doom's */
@@ -283,10 +280,10 @@ static void sound_apply(void)
 	if (fd >= 0) {
 		/* only the speaker's level: the receive path stays as the system left it, as when
 		 * OpenX6X00 plays a recording (tried otherwise: its AGC off silenced the sound) */
-		bool ok = base_write(fd, 14, (uint32_t)set_rxvol) && base_write(fd, 29, (uint32_t)set_moni);
+		bool ok = base_write(fd, 14, (uint32_t)set_rxvol);
 		close(fd);
-		logmsg("sound: monitor %d (the game), AF %d (the receiver), the SoC's output %d, the game %d %%: %s",
-		       set_moni, set_rxvol, set_headphone, set_volume, ok ? "set" : "NOT set");
+		logmsg("sound: AF %d, the SoC's output %d, the game %d %%: %s", set_rxvol, set_headphone, set_volume,
+		       ok ? "set" : "NOT set");
 	}
 	set_mixer();
 }
@@ -309,8 +306,7 @@ static void sound_load(void)
 						set_volume = v;
 					else if (raw && i == SO_AF && v >= 0 && v <= 55)
 						set_rxvol = v;
-					else if (i == SO_MONI && v >= 0 && v <= 100)
-						set_moni = v;
+					/* moni: an older test's; not used */
 				} else if (i == SO_HP && v >= 0 && v < sound_opts[i].n) {
 					sound_sel[i] = v;            /* the receive path's (older files): not used */
 				}
@@ -402,6 +398,20 @@ static void leave(int cmd)
 	reboot(RB_POWER_OFF);
 	for (;;)
 		pause();
+}
+
+static void on_crash(int sig, siginfo_t *si, void *uc)
+{
+	(void)uc;
+	char buf[160];
+	int n = snprintf(buf, sizeof buf, "CRASH: signal %d at address %p\n", sig, si ? si->si_addr : NULL);
+	if (log_fp) {
+		fwrite(buf, 1, (size_t)n, log_fp);
+		fflush(log_fp);
+		fsync(fileno(log_fp));
+	}
+	signal(sig, SIG_DFL);
+	leave(RB_POWER_OFF);
 }
 
 static void on_signal(int sig)
@@ -1380,16 +1390,16 @@ static void poll_input(void)
 	if (test_mode)
 		test_keys();
 	static uint32_t af_changed;
-	if (af_steps) {                           /* the VOL knob: the monitor, the game's way to the speaker */
-		set_moni += af_steps * 2;
-		set_moni = set_moni < 0 ? 0 : set_moni > 100 ? 100 : set_moni;
+	if (af_steps) {                           /* the VOL knob: AF, the game's way to the speaker */
+		set_rxvol += af_steps;
+		set_rxvol = set_rxvol < 0 ? 0 : set_rxvol > 55 ? 55 : set_rxvol;
 		af_steps = 0;
 		int fd = open("/dev/i2c-0", O_RDWR);
 		if (fd >= 0) {
-			base_write(fd, 29, (uint32_t)set_moni);
+			base_write(fd, 14, (uint32_t)set_rxvol);
 			close(fd);
 		}
-		note(T("Głośność: %d z 100", "Volume: %d of 100"), set_moni);
+		note(T("Głośność: %d z 55", "Volume: %d of 55"), set_rxvol);
 		af_changed = t ? t : 1;
 	}
 	if (af_changed && t - af_changed > 3000) {    /* kept once the turning stopped */
@@ -3629,16 +3639,16 @@ static void sound_menu(bool overlay)
 	menu_tick = tune_tick;
 	int sel = 0;
 	for (;;) {
-		static const int shown[] = {SO_MONI, SO_AF, SO_VOL, SO_HP};
+		static const int shown[] = {SO_AF, SO_VOL, SO_HP};
 		char labels[SO_N][96];
 		const char *items[SO_N + 2];
-		for (int k = 0; k < 4; k++) {
+		for (int k = 0; k < 3; k++) {
 			int i = shown[k];
 			const char *name = set_en ? sound_opts[i].en : sound_opts[i].pl;
 			if (i == SO_VOL)
 				snprintf(labels[i], sizeof labels[i], "%s:  %d %%", name, set_volume);
 			else if (i == SO_AF)
-				snprintf(labels[i], sizeof labels[i], "%s:  %d", name, set_rxvol);
+				snprintf(labels[i], sizeof labels[i], "%s:  %d z 55", name, set_rxvol);
 			else if (i == SO_MONI)
 				snprintf(labels[i], sizeof labels[i], "%s:  %d z 100", name, set_moni);
 			else {
@@ -3647,16 +3657,16 @@ static void sound_menu(bool overlay)
 			}
 			items[k] = labels[i];
 		}
-		items[4] = T("Zapisz jako domyślne", "Save as the default");
-		items[5] = T("Wróć", "Back");
+		items[3] = T("Zapisz jako domyślne", "Save as the default");
+		items[4] = T("Wróć", "Back");
 		if (overlay)
 			game_to_canvas();
-		int c = menu(T("Dźwięk", "Sound"), items, 6, sel,
+		int c = menu(T("Dźwięk", "Sound"), items, 5, sel,
 		             T("MFK / F2 / A: zmień  F1 / B / GEN: wróć", "MFK / F2 / A: change  F1 / B / GEN: back"), overlay);
-		if (c < 0 || c == 5)
+		if (c < 0 || c == 4)
 			break;
 		sel = c;
-		if (c < 4)
+		if (c < 3)
 			c = shown[c];
 		else
 			c = SO_N;
@@ -3667,10 +3677,7 @@ static void sound_menu(bool overlay)
 		} else if (c == SO_VOL) {
 			set_volume = set_volume >= 300 ? 25 : set_volume + 25;
 		} else if (c == SO_AF) {
-			set_rxvol = set_rxvol >= 55 ? 0 : set_rxvol + 5 > 55 ? 55 : set_rxvol + 5;
-			sound_apply();
-		} else if (c == SO_MONI) {
-			set_moni = set_moni >= 100 ? 10 : set_moni + 10;
+			set_rxvol = set_rxvol >= 55 ? 10 : set_rxvol + 5 > 55 ? 55 : set_rxvol + 5;
 			sound_apply();
 		} else {
 			sound_sel[c] = (sound_sel[c] + 1) % sound_opts[c].n;
@@ -3697,7 +3704,7 @@ static bool state_exists(int slot)
 static int game_menu(void)
 {
 	char vol[64];
-	snprintf(vol, sizeof vol, T("Głośność: %d z 100  (gałka VOL)", "Volume: %d of 100  (VOL knob)"), set_moni);
+	snprintf(vol, sizeof vol, T("Głośność: %d z 55  (gałka VOL)", "Volume: %d of 55  (VOL knob)"), set_rxvol);
 	const char *items[M_N] = {
 		T("Wróć do gry", "Back to the game"), vol, T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
@@ -3716,7 +3723,7 @@ static void help(void)
 		"#Radio",
 		"BAND ▲▼, DFN, DFL: krzyżak · F1: B · F2, PTT: A · F5: A turbo",
 		"F3: Select · F4: Start · gałka VFO: lewo/prawo",
-		"MFK (wciśnięcie) lub GEN: menu · gałka VOL: głośność",
+		"MFK (wciśnięcie) lub GEN: menu · gałka VOL: głośność (AF)",
 		"#Klawiatura",
 		"strzałki · X: A · Z: B · Enter: Start · Shift: Select · C/V: turbo",
 		"Esc: menu · F2: zapisz stan · F4: wczytaj stan",
@@ -3843,7 +3850,7 @@ static void play(int idx)
 			case M_RESET: retro_reset(); break;
 			case M_HELP: help(); break;
 			case M_VOLUME:                    /* a step up, round again from the top; the menu again */
-				set_moni = set_moni >= 100 ? 10 : set_moni + 10;
+				set_rxvol = set_rxvol >= 55 ? 10 : set_rxvol + 5 > 55 ? 55 : set_rxvol + 5;
 				sound_apply();
 				sound_save();
 				want_menu = true;
@@ -4097,7 +4104,6 @@ static void read_settings(void)
 		char s[16];
 		if (sscanf(line, " volume = %d", &v) == 1 && v >= 0 && v <= 300) set_volume = v;
 		else if (sscanf(line, " rxvol = %d", &v) == 1) set_rxvol = v;
-		else if (sscanf(line, " moni = %d", &v) == 1 && v >= 0 && v <= 100) set_moni = v;
 		else if (sscanf(line, " rxmute = %d", &v) == 1) set_rxmute = v != 0;
 		else if (sscanf(line, " headphone = %d", &v) == 1) set_headphone = v;
 		else if (sscanf(line, " record = %d", &v) == 1) set_record = v != 0;
@@ -4256,6 +4262,17 @@ int main(int argc, char **argv)
 		as_init();
 	signal(SIGTERM, on_signal);
 	signal(SIGINT, on_signal);
+	{
+		struct sigaction sa;
+		memset(&sa, 0, sizeof sa);
+		sa.sa_sigaction = on_crash;
+		sa.sa_flags = SA_SIGINFO;
+		sigaction(SIGSEGV, &sa, NULL);
+		sigaction(SIGBUS, &sa, NULL);
+		sigaction(SIGILL, &sa, NULL);
+		sigaction(SIGFPE, &sa, NULL);
+		sigaction(SIGABRT, &sa, NULL);
+	}
 	screen_init();
 	/* a splash while the rest comes up */
 	fill_bg(0, 0, LAND_W, LAND_H);
