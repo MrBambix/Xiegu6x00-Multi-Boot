@@ -27,6 +27,7 @@
 #include <linux/input.h>
 #include <linux/kd.h>
 #include <linux/reboot.h>
+#include <linux/watchdog.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -91,6 +92,13 @@ static void flush_disks(void)
 }
 
 static struct timespec t0;
+
+static uint64_t now_us(void)
+{
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u;
+}
 static uint32_t now_ms(void)
 {
 	struct timespec t;
@@ -264,7 +272,29 @@ static void leave(int cmd)
 		sleep(1);
 	}
 	reboot(cmd);
-	/* still here: the other way */
+	int err = errno;
+	if (cmd != (int)RB_POWER_OFF) {
+		/* still here: the restart refused. Written down, then the SoC's watchdog asked to reset it */
+		if (mount("/dev/mmcblk0p1", "/boot", "vfat", MS_NOATIME, NULL) == 0) {
+			FILE *f = fopen("/boot/nes-log.txt", "a");
+			if (f) {
+				fprintf(f, "restart: the kernel's reboot returned: %s; the watchdog next\n", strerror(err));
+				fclose(f);
+			}
+			flush_disks();
+			umount2("/boot", MNT_DETACH);
+		}
+		int wd = open("/dev/watchdog", O_WRONLY);
+		if (wd < 0)
+			wd = open("/dev/watchdog0", O_WRONLY);
+		if (wd >= 0) {
+			int t = 1;
+			ioctl(wd, WDIOC_SETTIMEOUT, &t);
+			ioctl(wd, WDIOC_KEEPALIVE, 0);
+			sleep(8);                         /* never fed again: it resets the SoC */
+		}
+	}
+	/* still here: off rather than stuck */
 	radio_poweroff();
 	sleep(1);
 	reboot(RB_POWER_OFF);
@@ -325,6 +355,14 @@ static void present(int x, int y, int w, int h)
 	if (y < 0) { h += y; y = 0; }
 	if (x + w > LAND_W) w = LAND_W - x;
 	if (y + h > LAND_H) h = LAND_H - y;
+	if (rotate == 3 && fb_native && w > 0 && h > 0) {
+		for (int lx = x; lx < x + w && (unsigned)lx < fb_h; lx++) {
+			uint32_t *dst = (uint32_t *)(fb + (fb_h - 1 - (unsigned)lx) * fb_stride);
+			for (int ly = y; ly < y + h && (unsigned)ly < fb_w; ly++)
+				dst[ly] = canvas[ly * LAND_W + lx];
+		}
+		return;
+	}
 	for (int lx = x; lx < x + w; lx++)
 		for (int ly = y; ly < y + h; ly++) {
 			unsigned fx, fy;
@@ -1573,7 +1611,7 @@ static unsigned snd_rate = 48000;
 static FILE *test_pcm;
 static int16_t abuf[48000 / 30 * 2 * 4];
 static size_t abuf_n;                 /* frames */
-static unsigned xruns, snd_writes;
+static unsigned xruns, snd_writes, gaps;
 
 /* The sound goes to the card from a thread of its own, as Doom's (extras/doom/x6100_sound.c):
  * 512 frames at a time, the card started at once. The game keeps its time by the clock and never
@@ -1602,9 +1640,32 @@ static void *snd_thread(void *arg)
 	(void)arg;
 	static int16_t out[PERIOD * 2];
 	int16_t last = 0;
+	bool primed = false;
 	while (snd_running) {
+		/* the first time and after a gap: a cushion of two periods first; a late frame waited
+		 * for a moment (up to 12 ms) rather than a hole in the sound */
+		for (int k = 0; k < 6; k++) {
+			pthread_mutex_lock(&ring_lock);
+			unsigned h = ring_w - ring_r;
+			pthread_mutex_unlock(&ring_lock);
+			if (h >= (primed ? PERIOD : PERIOD * 2))
+				break;
+			if (!primed) {
+				k = 0;                    /* not started: wait as long as it takes */
+				usleep(4000);
+				if (!snd_running)
+					return NULL;
+				continue;
+			}
+			usleep(2000);
+		}
+		primed = true;
 		pthread_mutex_lock(&ring_lock);
 		unsigned have = ring_w - ring_r;
+		if (have < PERIOD) {
+			gaps++;
+			primed = false;               /* a cushion again before the next */
+		}
 		if (have > PERIOD * 6)                /* too far behind (a menu was open): the oldest go */
 			ring_r = ring_w - PERIOD * 2, have = PERIOD * 2;
 		for (unsigned i = 0; i < PERIOD; i++) {
@@ -1757,6 +1818,7 @@ static const void *frame_data;
 static unsigned frame_w = 256, frame_h = 240;
 static size_t frame_pitch;
 static enum retro_pixel_format pixfmt = RETRO_PIXEL_FORMAT_0RGB1555;
+static bool frame_new;                       /* a picture the screen has not had yet */
 static uint16_t map_x[LAND_W], map_y[LAND_H];
 static int gx0, gy0, gw, gh;                 /* the game's place on the landscape screen */
 static unsigned mapped_w, mapped_h;
@@ -1767,6 +1829,7 @@ static void cb_video(const void *data, unsigned w, unsigned h, size_t pitch)
 	if (!data)
 		return;                       /* the same picture again */
 	frame_data = data;
+	frame_new = true;
 	frame_w = w;
 	frame_h = h;
 	frame_pitch = pitch;
@@ -1819,10 +1882,36 @@ static void game_to_canvas(void)
 /* The game's picture straight onto the screen */
 static void draw_game(void)
 {
-	if (!frame_data)
+	if (!frame_data || !frame_new)
 		return;
+	frame_new = false;
 	if (frame_w != mapped_w || frame_h != mapped_h)
 		setup_maps();
+	if (rotate == 3 && fb_native && pixfmt == RETRO_PIXEL_FORMAT_XRGB8888) {
+		/* a landscape column is a framebuffer row: one row per column, a repeated column copied */
+		uint32_t *prev = NULL;
+		for (int x = 0; x < gw; x++) {
+			unsigned lx = (unsigned)(gx0 + x);
+			if (lx >= fb_h)
+				break;
+			uint32_t *dst = (uint32_t *)(fb + (fb_h - 1 - lx) * fb_stride) + gy0;
+			if (prev && map_x[x] == map_x[x - 1]) {
+				memcpy(dst, prev, (size_t)gh * 4);
+			} else {
+				const uint8_t *col = (const uint8_t *)frame_data + map_x[x] * 4;
+				int y = 0;
+				while (y < gh) {
+					unsigned sy = map_y[y];
+					uint32_t p = *(const uint32_t *)(col + sy * frame_pitch);
+					dst[y++] = p;
+					while (y < gh && map_y[y] == sy)
+						dst[y++] = p;
+				}
+			}
+			prev = dst;
+		}
+		return;
+	}
 	for (int x = 0; x < gw; x++) {
 		unsigned sx = map_x[x];
 		for (int y = 0; y < gh; y++) {
@@ -3286,6 +3375,7 @@ static void play(int idx)
 	}
 	if (f)
 		fclose(f);
+	logmsg("game: %s, %zu bytes read", data ? "file read" : "file NOT read", size);
 	struct retro_game_info gi = {path, data, size, NULL};
 	if (!data || !retro_load_game(&gi)) {
 		free(data);
@@ -3325,6 +3415,7 @@ static void play(int idx)
 	present(0, 0, LAND_W, LAND_H);
 	input_settle();
 	uint32_t last_save = now_ms(), fps_t = now_ms();
+	uint64_t core_us = 0, draw_us = 0;
 	bool osd_shown = false;
 	unsigned frames = 0, fps_frames = 0;
 	int test_frames = test_mode ? (getenv("NES_TEST_FRAMES") ? atoi(getenv("NES_TEST_FRAMES")) : 300) : 0;
@@ -3362,8 +3453,12 @@ static void play(int idx)
 			if (done)
 				break;
 		}
+		uint64_t t1 = now_us();
 		retro_run();
+		uint64_t t2 = now_us();
 		draw_game();
+		draw_us += now_us() - t2;
+		core_us += t2 - t1;
 		if (note_until && (int32_t)(now_ms() - note_until) < 0) {   /* a word for a while, top left */
 			osd(note_text);
 			osd_shown = true;
@@ -3395,8 +3490,10 @@ static void play(int idx)
 			save_sram();
 		}
 		if (t - fps_t >= 10000) {
-			logmsg("%.1f frames/s, sound: %u periods played, %u gaps", (frames - fps_frames) * 1000.0 / (t - fps_t),
-			       snd_writes, xruns);
+			logmsg("%.1f frames/s (core %.1f ms, picture %.1f ms a frame), sound: %u periods, %u short, %u card errors",
+			       (frames - fps_frames) * 1000.0 / (t - fps_t), core_us / 1000.0 / (frames - fps_frames + 1),
+			       draw_us / 1000.0 / (frames - fps_frames + 1), snd_writes, gaps, xruns);
+			core_us = draw_us = 0;
 			fps_t = t;
 			fps_frames = frames;
 		}
@@ -3524,6 +3621,7 @@ static void game_list(void)
 		if (c < 0)
 			continue;
 		sel = c;
+		logmsg("list: chose %d of %d (%s)", c, n, c < n ? items[c] : "?");
 		if (c < n_games) {
 			play(c);
 			continue;
