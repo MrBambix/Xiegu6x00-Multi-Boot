@@ -19,6 +19,9 @@ git clone -q https://github.com/tinyalsa/tinyalsa "$W/tinyalsa"
 git -C "$W/tinyalsa" checkout -q $TA_COMMIT
 TA=$W/tinyalsa
 RI=$W/fceumm/src/drivers/libretro/libretro-common/include
+# The menus' font: Inter (SIL OFL), rendered smooth into a C header (the fonts-inter package's)
+INTER=$(dirname "$(find /usr/share/fonts -name Inter-Medium.otf | head -1)")
+python3 "$HERE/make_font.py" "$INTER" "$W/font_inter.h"
 
 build() {   # build CC OUTDIR EXTRA_FLAGS...
     local cc=$1 out=$2; shift 2
@@ -30,7 +33,7 @@ build() {   # build CC OUTDIR EXTRA_FLAGS...
     for f in pcm pcm_hw mixer mixer_hw limits snd_card_plugin; do
         $cc -O2 -w -I"$TA/include" "$@" -c "$TA/src/$f.c" -o "$out/ta_$f.o"
     done
-    $cc -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -I"$RI" -I"$TA/include" "$@" \
+    $cc -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -I"$RI" -I"$TA/include" -I"$W" "$@" \
         -c "$HERE/nes_x6100.c" -o "$out/nes_x6100.o"
     # A name the front end takes from the C library must not be one the core defines too: the
     # static link takes the core's (FCEUmm's global "sync" variable stood in for sync() so)
@@ -131,10 +134,11 @@ mkdir -p "$R/sbin" "$R/nes/bt" "$R/dev" "$R/proc" "$R/sys" "$R/tmp" "$R/boot"
 cp "$W/nes" "$R/sbin/init"
 cp "$W/fceumm/Copying" "$R/nes/FCEUMM-COPYING.txt"
 cp "$TA/NOTICE" "$R/nes/TINYALSA-NOTICE.txt"
+cp "$(find /usr/share/doc/fonts-inter -name copyright | head -1)" "$R/nes/INTER-FONT-LICENSE.txt" 2>/dev/null || true
 cat > "$R/nes/README.txt" <<'TXT'
 A NES emulator on the Xiegu X6100 (an extra of Xiegu Multi Patcher, by SQ6RT).
 Core: FCEUmm (libretro-fceumm, GPL-2.0) with an X6100 front end (GPL-2.0-or-later); sound through
-tinyalsa (BSD-3-Clause); the menus' font: font8x8 by Daniel Hepper (public domain).
+tinyalsa (BSD-3-Clause); the menus' font: Inter by Rasmus Andersson (SIL Open Font License 1.1).
 No game comes with it: your own .nes / .fds / .unf / .nsf files go in the NES folder of the card's
 BOOT partition. Sources: https://github.com/TomekR1/Xiegu6x00-Multi-Boot (extras/nes) and
 https://github.com/libretro/libretro-fceumm

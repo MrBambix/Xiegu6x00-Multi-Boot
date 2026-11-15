@@ -16,6 +16,7 @@
  */
 #define _GNU_SOURCE             /* posix_openpt, ptsname: the pseudo-terminal for bluetoothctl */
 #include <ctype.h>
+#include <math.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -52,7 +53,7 @@
 #include <tinyalsa/asoundlib.h>
 
 #include "libretro.h"
-#include "font8x8.h"
+#include "font_inter.h"
 
 #define LAND_W   800             /* the screen, as the radio is held */
 #define LAND_H   480
@@ -333,6 +334,39 @@ static void present(int x, int y, int w, int h)
 		}
 }
 
+/* The colours: the app's dark look, green accent */
+#define C_BG_TOP 0x101a2au
+#define C_BG_BOT 0x060a12u
+#define C_BAR    0x0d1522u
+#define C_PANEL  0x172234u
+#define C_PANEL2 0x1d2a3fu
+#define C_LINE   0x2a3a52u
+#define C_TEXT   0xeef3f8u
+#define C_DIM    0x8d9db2u
+#define C_ACCENT 0x34c77bu
+#define C_SEL_T  0x05140bu
+#define C_WARN   0xf6b93bu
+#define C_BLUE   0x6cb4ffu
+#define C_RED    0xe5484du
+
+static inline uint32_t mix(uint32_t a, uint32_t b, unsigned t)    /* t/255 of b over a */
+{
+	unsigned r = ((a >> 16) & 0xff) * (255 - t) + ((b >> 16) & 0xff) * t;
+	unsigned g = ((a >> 8) & 0xff) * (255 - t) + ((b >> 8) & 0xff) * t;
+	unsigned l = (a & 0xff) * (255 - t) + (b & 0xff) * t;
+	return ((r / 255) << 16) | ((g / 255) << 8) | (l / 255);
+}
+
+static int clip_x0, clip_x1 = LAND_W;    /* text drawn only between these */
+
+static inline void blend(int x, int y, uint32_t c, unsigned a)
+{
+	if (x < clip_x0 || x >= clip_x1 || y < 0 || y >= LAND_H || !a)
+		return;
+	uint32_t *p = &canvas[y * LAND_W + x];
+	*p = a >= 255 ? c : mix(*p, c, a);
+}
+
 static void fill(int x, int y, int w, int h, uint32_t c)
 {
 	for (int yy = y < 0 ? 0 : y; yy < y + h && yy < LAND_H; yy++)
@@ -340,71 +374,285 @@ static void fill(int x, int y, int w, int h, uint32_t c)
 			canvas[yy * LAND_W + xx] = c;
 }
 
-/* Polish letters (UTF-8) as their plain ones: the font is ASCII */
-static int next_char(const char **s)
+/* The screen's backdrop: dark blue, lighter at the top */
+static uint32_t bg_at(int y)
 {
-	const unsigned char *p = (const unsigned char *)*s;
-	if (p[0] < 0x80) {
-		(*s)++;
-		return p[0];
-	}
-	if ((p[0] & 0xe0) == 0xc0 && p[1]) {
-		unsigned cp = ((p[0] & 0x1fu) << 6) | (p[1] & 0x3fu);
-		*s += 2;
-		static const struct { unsigned cp; char c; } pl[] = {
-			{0x105, 'a'}, {0x107, 'c'}, {0x119, 'e'}, {0x142, 'l'}, {0x144, 'n'}, {0xf3, 'o'},
-			{0x15b, 's'}, {0x17a, 'z'}, {0x17c, 'z'}, {0x104, 'A'}, {0x106, 'C'}, {0x118, 'E'},
-			{0x141, 'L'}, {0x143, 'N'}, {0xd3, 'O'}, {0x15a, 'S'}, {0x179, 'Z'}, {0x17b, 'Z'},
-		};
-		for (size_t i = 0; i < sizeof pl / sizeof pl[0]; i++)
-			if (pl[i].cp == cp)
-				return pl[i].c;
-		return '?';
-	}
-	int n = (p[0] & 0xf0) == 0xe0 ? 3 : (p[0] & 0xf8) == 0xf0 ? 4 : 1;
-	while (n-- && **s)
-		(*s)++;
-	return '?';
+	return mix(C_BG_TOP, C_BG_BOT, (unsigned)(y < 0 ? 0 : y >= LAND_H ? 255 : y * 255 / LAND_H));
 }
 
-/* Text at (x, y), each font pixel s x s; how wide it came out. max: characters at most */
-static int text(int x, int y, int s, uint32_t c, const char *str, int max)
+static void fill_bg(int x, int y, int w, int h)
 {
-	int x0 = x, n = 0;
-	while (*str && n < max) {
-		int ch = next_char(&str);
-		if (ch < 32 || ch > 126)
-			ch = '?';
-		const unsigned char *g = font8x8_basic[ch];
-		for (int r = 0; r < 8; r++)
-			for (int b = 0; b < 8; b++)
-				if (g[r] & (1 << b))
-					fill(x + b * s, y + r * s, s, s, c);
-		x += 8 * s;
-		n++;
+	for (int yy = y < 0 ? 0 : y; yy < y + h && yy < LAND_H; yy++) {
+		uint32_t c = bg_at(yy);
+		for (int xx = x < 0 ? 0 : x; xx < x + w && xx < LAND_W; xx++)
+			canvas[yy * LAND_W + xx] = c;
+	}
+}
+
+/* A rectangle with round corners, their edges smooth; a = its opacity (255: solid) */
+static void rrect_a(int x, int y, int w, int h, int r, uint32_t c, unsigned a)
+{
+	if (r * 2 > h) r = h / 2;
+	if (r * 2 > w) r = w / 2;
+	int cx0 = clip_x0, cx1 = clip_x1;
+	clip_x0 = 0;
+	clip_x1 = LAND_W;
+	for (int yy = 0; yy < h; yy++) {
+		for (int xx = 0; xx < w; xx++) {
+			int dx = xx < r ? r - xx : xx >= w - r ? xx - (w - r - 1) : 0;
+			int dy = yy < r ? r - yy : yy >= h - r ? yy - (h - r - 1) : 0;
+			unsigned cov = 255;
+			if (dx && dy) {                   /* in a corner: how much of the pixel is inside */
+				float d = sqrtf((float)((dx - 0.5f) * (dx - 0.5f) + (dy - 0.5f) * (dy - 0.5f)));
+				float k = (float)r - d + 0.5f;
+				if (k <= 0) continue;
+				if (k < 1) cov = (unsigned)(k * 255);
+			}
+			blend(x + xx, y + yy, c, cov * a / 255);
+		}
+	}
+	clip_x0 = cx0;
+	clip_x1 = cx1;
+}
+
+static void rrect(int x, int y, int w, int h, int r, uint32_t c)
+{
+	rrect_a(x, y, w, h, r, c, 255);
+}
+
+/* A framed box: a hair line around, the inside in c */
+static void box(int x, int y, int w, int h, int r, uint32_t c, uint32_t line)
+{
+	rrect(x, y, w, h, r, line);
+	rrect(x + 1, y + 1, w - 2, h - 2, r - 1, c);
+}
+
+/* The canvas darker (a picture behind a window) */
+static void dim(int x, int y, int w, int h, unsigned keep)
+{
+	for (int yy = y; yy < y + h && yy < LAND_H; yy++)
+		for (int xx = x; xx < x + w && xx < LAND_W; xx++) {
+			uint32_t p = canvas[yy * LAND_W + xx];
+			canvas[yy * LAND_W + xx] = ((((p >> 16) & 0xff) * keep / 255) << 16) |
+			                           ((((p >> 8) & 0xff) * keep / 255) << 8) | ((p & 0xff) * keep / 255);
+		}
+}
+
+/* What is on the screen now (the game's picture) into the canvas */
+static void fb_to_canvas(void)
+{
+	for (int ly = 0; ly < LAND_H; ly++)
+		for (int lx = 0; lx < LAND_W; lx++) {
+			unsigned fx, fy;
+			land_to_fb((unsigned)lx, (unsigned)ly, &fx, &fy);
+			uint32_t p = 0;
+			if (fx < fb_w && fy < fb_h) {
+				const uint8_t *d = fb + fy * fb_stride + fx * fb_bpp;
+				if (fb_native) {
+					p = *(const uint32_t *)d & 0xffffff;
+				} else if (fb_bpp == 4) {
+					uint32_t v = *(const uint32_t *)d;
+					p = (((v >> vinfo.red.offset) & 0xff) << 16) | (((v >> vinfo.green.offset) & 0xff) << 8) |
+					    ((v >> vinfo.blue.offset) & 0xff);
+				} else {
+					uint16_t v = *(const uint16_t *)d;
+					p = ((v & 0xf800u) << 8) | ((v & 0x07e0u) << 5) | ((v & 0x1fu) << 3);
+				}
+			}
+			canvas[ly * LAND_W + lx] = p;
+		}
+}
+
+/* ---- text: Inter, smooth, with the Polish letters (font_inter.h, made by make_font.py) ---- */
+static uint32_t next_cp(const char **s)
+{
+	const unsigned char *p = (const unsigned char *)*s;
+	uint32_t c = p[0];
+	int n = 0;
+	if (c < 0x80) n = 0;
+	else if ((c & 0xe0) == 0xc0) { c &= 0x1f; n = 1; }
+	else if ((c & 0xf0) == 0xe0) { c &= 0x0f; n = 2; }
+	else if ((c & 0xf8) == 0xf0) { c &= 0x07; n = 3; }
+	else { (*s)++; return '?'; }
+	(*s)++;
+	for (int i = 0; i < n; i++) {
+		if ((**s & 0xc0) != 0x80)
+			return '?';
+		c = (c << 6) | (**s & 0x3f);
+		(*s)++;
+	}
+	return c;
+}
+
+static const struct glyph *glyph_of(int f, uint32_t cp)
+{
+	const struct face *fc = &faces[f];
+	int lo = 0, hi = fc->n - 1;
+	while (lo <= hi) {
+		int m = (lo + hi) / 2;
+		if (fc->g[m].cp == cp) return &fc->g[m];
+		if (fc->g[m].cp < cp) lo = m + 1;
+		else hi = m - 1;
+	}
+	return cp == '?' ? &fc->g[0] : glyph_of(f, '?');
+}
+
+static bool face_has(int f, const char *s)
+{
+	while (*s) {
+		uint32_t cp = next_cp(&s);
+		const struct glyph *g = glyph_of(f, cp);
+		if (g->cp != cp)
+			return false;
+	}
+	return true;
+}
+
+static int text_w(int f, const char *s)
+{
+	int w = 0;
+	while (*s)
+		w += glyph_of(f, next_cp(&s))->adv;
+	return w;
+}
+
+/* Text with its top at y, letters up to x = upto only; how wide it came out */
+static int draw_text_upto(int x, int y, int f, uint32_t c, const char *s, int upto)
+{
+	int x0 = x, base = y + faces[f].ascent;
+	while (*s) {
+		const struct glyph *g = glyph_of(f, next_cp(&s));
+		if (x + g->adv > upto)
+			break;
+		const uint8_t *px = font_px + g->off;
+		for (int yy = 0; yy < g->h; yy++)
+			for (int xx = 0; xx < g->w; xx++)
+				blend(x + g->x + xx, base + g->y + yy, c, px[yy * g->w + xx]);
+		x += g->adv;
 	}
 	return x - x0;
 }
 
-static int text_len(const char *s)
+static int draw_text(int x, int y, int f, uint32_t c, const char *s)
 {
-	int n = 0;
-	while (*s) {
-		next_char(&s);
-		n++;
-	}
-	return n;
+	return draw_text_upto(x, y, f, c, s, 1 << 30);
 }
 
-/* The palette: the app's flat look, green accent */
-#define C_BG     0x0b1014u
-#define C_PANEL  0x151d24u
-#define C_LINE   0x2a3640u
-#define C_TEXT   0xe8eef2u
-#define C_DIM    0x8a99a6u
-#define C_ACCENT 0x2fbf71u
-#define C_SEL_T  0x08130du
-#define C_WARN   0xf0b429u
+/* Text no wider than maxw: cut with "…", or moving along when it is the chosen line */
+static int draw_text_fit(int x, int y, int f, uint32_t c, const char *s, int maxw, bool moving)
+{
+	int w = text_w(f, s);
+	int cx0 = clip_x0, cx1 = clip_x1;
+	if (w <= maxw) {
+		draw_text(x, y, f, c, s);
+	} else if (moving) {
+		int span = w - maxw, phase = (int)((now_ms() / 20) % (unsigned)(span + 120));
+		int off = phase < 60 ? 0 : phase - 60 > span ? span : phase - 60;
+		clip_x0 = x > cx0 ? x : cx0;
+		clip_x1 = x + maxw < cx1 ? x + maxw : cx1;
+		draw_text(x - off, y, f, c, s);
+	} else {
+		int ell = text_w(f, "…");
+		int w2 = draw_text_upto(x, y, f, c, s, x + maxw - ell);
+		draw_text(x + w2, y, f, c, "…");
+	}
+	clip_x0 = cx0;
+	clip_x1 = cx1;
+	return w < maxw ? w : maxw;
+}
+
+/* Words wrapped to maxw, at most rows lines; how many lines */
+static int draw_wrapped(int x, int y, int f, uint32_t c, const char *s, int maxw, int line_h, int rows)
+{
+	int row = 0;
+	char line[256];
+	while (*s && row < rows) {
+		size_t best = 0, n = 0;
+		while (s[n] && n < sizeof line - 1) {
+			if (s[n] == ' ' || !s[n + 1]) {
+				size_t end = s[n] == ' ' ? n : n + 1;
+				snprintf(line, sizeof line, "%.*s", (int)end, s);
+				if (text_w(f, line) > maxw && best)
+					break;
+				best = end;
+			}
+			n++;
+		}
+		if (!best)
+			best = n;
+		snprintf(line, sizeof line, "%.*s", (int)best, s);
+		if (row == rows - 1 && s[best])
+			draw_text_fit(x, y + row * line_h, f, c, s, maxw, false);
+		else
+			draw_text(x, y + row * line_h, f, c, line);
+		row++;
+		s += best;
+		while (*s == ' ') s++;
+	}
+	return row;
+}
+
+/* A key's chip ("F2") and what it does: the width */
+static int key_chip(int x, int y, const char *key, const char *what)
+{
+	int kw = text_w(F_SMALL, key) + 14;
+	rrect(x, y, kw, 22, 6, C_LINE);
+	draw_text(x + 7, y + 2, F_SMALL, C_TEXT, key);
+	int w = kw + 7;
+	if (what && *what)
+		w += draw_text(x + w, y + 2, F_SMALL, C_DIM, what) + 18;
+	return w;
+}
+
+/* "F2/A: choose  F1/B: back" as chips */
+static void key_chips(int x, int y, int maxx, const char *hint)
+{
+	char buf[256];
+	snprintf(buf, sizeof buf, "%s", hint);
+	char *p = buf;
+	while (p && *p) {
+		char *next = strstr(p, "  ");
+		if (next) {
+			*next = 0;
+			next += 2;
+			while (*next == ' ') next++;
+		}
+		char *colon = strstr(p, ": ");
+		char key[48], what[256];
+		if (colon) {
+			snprintf(key, sizeof key, "%.*s", (int)(colon - p), p);
+			snprintf(what, sizeof what, "%s", colon + 2);
+		} else {
+			key[0] = 0;
+			snprintf(what, sizeof what, "%s", p);
+		}
+		int need = (key[0] ? text_w(F_SMALL, key) + 21 : 0) + text_w(F_SMALL, what) + 18;
+		if (x + need > maxx)
+			break;
+		if (key[0])
+			x += key_chip(x, y, key, what);
+		else
+			x += draw_text(x, y + 2, F_SMALL, C_DIM, what) + 18;
+		p = next;
+	}
+}
+
+/* A pad, drawn: the splash's and the game panel's picture */
+static void draw_pad(int x, int y, int s)       /* s: its width; height s/2 */
+{
+	int h = s * 46 / 100;
+	rrect(x + s / 60, y + s / 40, s, h, s / 12, 0x05080d);
+	rrect(x, y, s, h, s / 12, 0xcfd3da);
+	rrect(x + s * 6 / 100, y + s * 10 / 100, s * 88 / 100, h - s * 20 / 100, s / 22, 0x272b33);
+	int cx = x + s * 22 / 100, cy = y + h / 2, a = s * 7 / 100, b = s * 22 / 100;
+	rrect(cx - b / 2, cy - a / 2, b, a, a / 4, 0x101114);
+	rrect(cx - a / 2, cy - b / 2, a, b, a / 4, 0x101114);
+	rrect(x + s * 42 / 100, cy - s / 50, s * 8 / 100, s * 3 / 100, s / 60, 0x80858f);
+	rrect(x + s * 53 / 100, cy - s / 50, s * 8 / 100, s * 3 / 100, s / 60, 0x80858f);
+	int r = s * 6 / 100;
+	rrect(x + s * 70 / 100 - r, cy - r, 2 * r, 2 * r, r, C_RED);
+	rrect(x + s * 84 / 100 - r, cy - r, 2 * r, 2 * r, r, C_RED);
+}
 
 /* ------------------------------------------------------------------------------------------ */
 /* Input                                                                                      */
@@ -717,7 +965,7 @@ static void drop_input(int i)
 {
 	logmsg("input %s (\"%s\") gone", devs[i].node, devs[i].name);
 	if (devs[i].role != ROLE_RADIO)
-		note(T("Odlaczono: %.60s", "Disconnected: %.60s"), devs[i].name);
+		note(T("Odłączono: %.60s", "Disconnected: %.60s"), devs[i].name);
 	close(devs[i].fd);
 	for (int j = i; j < n_devs - 1; j++) {
 		devs[j] = devs[j + 1];
@@ -828,7 +1076,7 @@ static void open_inputs(void)
 			if (known)
 				note(T("Pad gracza %d: %.50s", "Player %d pad: %.50s"), v->port + 1, v->name);
 			else
-				note(T("Pad gracza %d. Inny uklad? Menu > Przyciski pada", "Player %d pad. Other layout? Menu > Pad buttons"),
+				note(T("Pad gracza %d. Inny układ? Menu > Przyciski pada", "Player %d pad. Other layout? Menu > Pad buttons"),
 				     v->port + 1);
 		} else if (v->role == ROLE_KEYBOARD) {
 			note(T("Klawiatura: %.60s", "Keyboard: %.60s"), v->name);
@@ -1039,36 +1287,8 @@ static void idle(unsigned ms)
 /* ------------------------------------------------------------------------------------------ */
 /* Menus                                                                                      */
 /* ------------------------------------------------------------------------------------------ */
-#define ROW 34
-
-/* How far a long selected line has moved: still a moment, then along, then still at its end */
-static int marquee(int len, int max)
-{
-	if (len <= max)
-		return 0;
-	int span = len - max, phase = (int)((now_ms() / 220) % (unsigned)(span + 14));
-	return phase < 7 ? 0 : phase - 7 > span ? span : phase - 7;
-}
-
-/* A line max characters wide: cut with "..", or moving along when it is the chosen one */
-static void text_fit(int x, int y, int s, uint32_t c, const char *str, int max, bool moving)
-{
-	int len = text_len(str);
-	if (len <= max) {
-		text(x, y, s, c, str, max);
-	} else if (moving) {
-		const char *p = str;
-		for (int i = marquee(len, max); i > 0; i--)
-			next_char(&p);
-		text(x, y, s, c, p, max);
-	} else {
-		int w = text(x, y, s, c, str, max - 2);
-		text(x + w, y, s, C_DIM, "..", 2);
-	}
-}
-
-/* What is connected: pads, keyboard, mouse, Bluetooth */
-static void status_text(char *out, size_t n)
+/* What is connected, as chips at the top right: the width they took */
+static int status_chips(int right, int y)
 {
 	int pads = 0;
 	bool kb = false, mouse = false;
@@ -1077,86 +1297,142 @@ static void status_text(char *out, size_t n)
 		kb |= devs[i].role == ROLE_KEYBOARD;
 		mouse |= devs[i].role == ROLE_MOUSE;
 	}
-	char p[24] = "";
-	if (pads)
-		snprintf(p, sizeof p, T("PAD x%d  ", "PAD x%d  "), pads);
-	snprintf(out, n, "%s%s%s%s", p, kb ? T("KLAW  ", "KEYB  ") : "", mouse ? T("MYSZ  ", "MOUSE  ") : "",
-	         bt_powered == 1 ? "BT" : bt_powered == 0 ? T("BT wyl", "BT off") : "");
+	const char *chips[4];
+	uint32_t col[4];
+	int n = 0;
+	char p[24];
+	if (pads) {
+		snprintf(p, sizeof p, pads > 1 ? "PAD ×%d" : "PAD", pads);
+		chips[n] = p;
+		col[n++] = C_ACCENT;
+	}
+	if (kb) { chips[n] = T("KLAWIATURA", "KEYBOARD"); col[n++] = C_TEXT; }
+	if (mouse) { chips[n] = T("MYSZ", "MOUSE"); col[n++] = C_TEXT; }
+	if (bt_powered >= 0) { chips[n] = bt_powered ? "BT" : T("BT wył.", "BT off"); col[n++] = bt_powered ? C_BLUE : C_DIM; }
+	int x = right;
+	for (int i = n - 1; i >= 0; i--) {
+		int w = text_w(F_SMALL, chips[i]) + 18;
+		x -= w;
+		box(x, y, w, 24, 12, C_BAR, C_LINE);
+		draw_text(x + 9, y + 3, F_SMALL, col[i], chips[i]);
+		x -= 8;
+	}
+	return right - x;
 }
 
-static int panel_y = -1, panel_h;          /* the last box's place: cleared when a smaller one follows */
+static int panel_y = -1, panel_h;          /* the last box's place: what was under it comes back */
+static uint32_t under[LAND_H * LAND_W];     /* the screen behind the boxes, darkened */
 
-/* A list on the screen (overlay: a panel over the game) */
+/* A list on the screen (overlay: a window over the game) */
 struct list_view {
 	const char *title;
 	const char *const *items;
 	int n, sel, top;
 	const char *hint, *empty;
 	bool overlay;
+	void (*side)(int sel, int x, int y, int w, int h);   /* a panel beside the list (the game list's) */
+	bool dimmed;
 };
+
+#define ROW   44
+#define OROW  36
+
+static void list_geom(const struct list_view *v, int *x, int *y, int *w, int *rows, int *row_h)
+{
+	if (v->overlay) {
+		*x = 150; *y = 64; *w = 500; *row_h = OROW; *rows = 10;
+	} else {
+		*x = 20; *y = 76; *w = v->side ? 470 : LAND_W - 40; *row_h = ROW; *rows = 8;
+	}
+}
+
+/* One line of the list (the chosen one is redrawn alone while its long name moves) */
+static void draw_row(const struct list_view *v, int r, bool show)
+{
+	int x, y, w, rows, rh;
+	list_geom(v, &x, &y, &w, &rows, &rh);
+	int i = v->top + r, ry = y + r * rh;
+	if (v->overlay)
+		fill(x, ry, w, rh, C_PANEL);
+	else
+		fill_bg(x, ry, w, rh);
+	if (i < v->n) {
+		bool on = i == v->sel;
+		const char *s = v->items[i];
+		bool extra = !strncmp(s, "› ", 4);     /* not a game: a thing to do */
+		if (extra) s += 4;
+		int f = v->overlay ? F_BODY : F_LIST, ty = ry + (rh - faces[f].height) / 2;
+		if (on) {
+			rrect(x + 4, ry + 3, w - 18, rh - 6, 10, C_ACCENT);
+			rrect(x + 4, ry + 3, 5, rh - 6, 2, 0xb8f5d0);
+		}
+		if (extra)
+			draw_text(x + 18, ty, f, on ? C_SEL_T : C_BLUE, "›");
+		draw_text_fit(x + (extra ? 34 : 18), ty, f, on ? C_SEL_T : extra ? C_BLUE : C_TEXT, s,
+		              w - (extra ? 34 : 18) - 30, on);
+	}
+	if (show)
+		present(x, ry, w, rh);
+}
 
 static void draw_list(struct list_view *v)
 {
+	int x, y, w, rows, rh;
+	list_geom(v, &x, &y, &w, &rows, &rh);
 	panel_y = -1;
-	int x = v->overlay ? 40 : 0, y = v->overlay ? 8 : 0, w = v->overlay ? 720 : LAND_W, h = v->overlay ? 464 : LAND_H;
-	int rows = (h - 110) / ROW;
 	if (v->sel < v->top) v->top = v->sel;
 	if (v->sel >= v->top + rows) v->top = v->sel - rows + 1;
 	if (v->top < 0) v->top = 0;
-	fill(x, y, w, h, v->overlay ? C_PANEL : C_BG);
 	if (v->overlay) {
-		fill(x, y, w, 3, C_ACCENT);
-		fill(x, y + h - 2, w, 2, C_LINE);
-	}
-	int title_max = (w - 48) / 24;
-	if (!v->overlay) {                    /* what is connected, top right */
-		char st[64];
-		status_text(st, sizeof st);
-		int sw = text_len(st) * 16;
-		if (sw)
-			text(x + w - 24 - sw, y + 28, 2, C_DIM, st, 40);
-		title_max = (w - 48 - sw - 16) / 24;
-	}
-	text_fit(x + 24, y + 20, 3, C_ACCENT, v->title, title_max, true);
-	fill(x + 24, y + 54, w - 48, 2, C_LINE);
-	if (!v->n && v->empty) {              /* nothing yet: the words, wrapped */
-		int max = (w - 56) / 16, row = 0;
-		const char *p = v->empty;
-		while (*p && row < 8) {
-			int len = (int)strlen(p), take = len <= max ? len : max;
-			if (take < len)
-				for (int k = take; k > max / 2; k--)
-					if (p[k] == ' ') { take = k; break; }
-			char line[128];
-			snprintf(line, sizeof line, "%.*s", take, p);
-			text(x + 28, y + 70 + row++ * 26, 2, C_DIM, line, max);
-			p += take;
-			while (*p == ' ') p++;
+		if (!v->dimmed) {                     /* the game behind, darker */
+			v->dimmed = true;
+			dim(0, 0, LAND_W, LAND_H, 90);
+			present(0, 0, LAND_W, LAND_H);
 		}
+		int px = x - 20, py = 10, pw = w + 40, ph = LAND_H - 20;
+		rrect_a(px + 4, py + 6, pw, ph, 18, 0x000000, 120);    /* its shadow */
+		box(px, py, pw, ph, 18, C_PANEL, C_LINE);
+		rrect(px + 1, py + 1, pw - 2, 46, 17, C_PANEL2);
+		fill(px + 1, py + 30, pw - 2, 17, C_PANEL2);
+		fill(px + 1, py + 47, pw - 2, 1, C_LINE);
+		draw_text_fit(px + 22, py + 9, F_TITLE, C_TEXT, v->title, pw - 44, true);
+		for (int r = 0; r < rows; r++)
+			draw_row(v, r, false);
+		key_chips(px + 20, py + ph - 34, px + pw - 10, v->hint ? v->hint : "");
+		present(px, py, pw + 4, ph + 6);
+		return;
 	}
-	for (int r = 0; r < rows && v->top + r < v->n; r++) {
-		int i = v->top + r, ry = y + 66 + r * ROW;
-		bool on = i == v->sel;
-		if (on)
-			fill(x + 16, ry - 5, w - 32, ROW - 2, C_ACCENT);
-		text_fit(x + 28, ry, 3, on ? C_SEL_T : C_TEXT, v->items[i], (w - 64) / 24, on);
+	fill_bg(0, 0, LAND_W, LAND_H);
+	fill(0, 0, LAND_W, 62, C_BAR);
+	fill(0, 62, LAND_W, 1, C_LINE);
+	int sw = status_chips(LAND_W - 20, 19);
+	draw_text_fit(26, 13, F_TITLE, C_TEXT, v->title, LAND_W - 60 - sw, true);
+	rrect(26, 56, 46, 4, 2, C_ACCENT);
+	for (int r = 0; r < rows; r++)
+		draw_row(v, r, false);
+	if (!v->n && v->empty)                    /* nothing yet: what to do */
+		draw_wrapped(x + 18, y + 10, F_BODY, C_DIM, v->empty, w - 40, 28, 8);
+	if (v->n > rows) {                        /* where in the list */
+		int track = rows * rh - 8, bar = track * rows / v->n;
+		if (bar < 24) bar = 24;
+		int by = y + 4 + (track - bar) * v->top / (v->n - rows);
+		rrect(x + w - 8, y + 4, 5, track, 2, C_LINE);
+		rrect(x + w - 8, by, 5, bar, 2, C_ACCENT);
 	}
-	if (v->n > rows) {                    /* where in the list */
-		int track = h - 130, bar = track * rows / v->n;
-		if (bar < 12) bar = 12;
-		int by = y + 66 + (track - bar) * v->top / (v->n - rows);
-		fill(x + w - 10, y + 66, 4, track, C_LINE);
-		fill(x + w - 10, by, 4, bar, C_ACCENT);
-	}
+	if (v->side)
+		v->side(v->sel, x + w + 16, y, LAND_W - (x + w + 16) - 20, rows * rh);
+	fill(0, LAND_H - 42, LAND_W, 42, C_BAR);
+	fill(0, LAND_H - 42, LAND_W, 1, C_LINE);
 	if (v->hint)
-		text_fit(x + 24, y + h - 30, 2, C_DIM, v->hint, (w - 48) / 16, false);
-	present(x, y, w, h);
+		key_chips(24, LAND_H - 32, LAND_W - 20, v->hint);
+	present(0, 0, LAND_W, LAND_H);
 }
 
 /* One step of a list's choosing: -1 going on, -2 back, else the chosen one */
 static int list_step(struct list_view *v, bool *dirty)
 {
-	int rows = ((v->overlay ? 464 : LAND_H) - 110) / ROW;
+	int x, y, w, rows, rh;
+	list_geom(v, &x, &y, &w, &rows, &rh);
 	enum nav k;
 	while ((k = nav_pop()) != N_NONE) {
 		*dirty = true;
@@ -1176,25 +1452,54 @@ static int list_step(struct list_view *v, bool *dirty)
 
 static bool keys_scripted(void);
 
-/* A list to choose from: its index, or -1 (back). overlay: a panel over the game */
-static int menu(const char *title, const char *const *items, int n, int sel, const char *hint, bool overlay)
+/* The chosen line, if its name is longer than its room: redrawn now and then, so it moves */
+static void move_long(const struct list_view *v, uint32_t *last)
 {
-	struct list_view v = {title, items, n, sel < 0 || sel >= n ? 0 : sel, 0, hint, NULL, overlay};
+	if (v->sel >= v->n || now_ms() - *last < 40)
+		return;
+	int x, y, w, rows, rh;
+	list_geom(v, &x, &y, &w, &rows, &rh);
+	const char *s = v->items[v->sel];
+	if (text_w(v->overlay ? F_BODY : F_LIST, s) <= w - 64)
+		return;
+	*last = now_ms();
+	draw_row(v, v->sel - v->top, true);
+}
+
+/* A list to choose from: its index, or -1 (back). overlay: a window over the game; side: a
+ * panel beside the list, told the chosen line */
+static int menu_ex(const char *title, const char *const *items, int n, int sel, const char *hint, bool overlay,
+                   void (*side)(int, int, int, int, int))
+{
+	struct list_view v = {title, items, n, sel < 0 || sel >= n ? 0 : sel, 0, hint, NULL, overlay, side, false};
 	bool dirty = true;
-	uint32_t drawn = 0;
+	uint32_t drawn = 0, moved = 0;
 	input_settle();
 	for (;;) {
 		poll_input();
+		int old = v.sel, old_top = v.top;
 		int c = list_step(&v, &dirty);
 		want_menu = false;
 		if (c != -1) {
 			input_settle();
 			return c == -2 ? -1 : c;
 		}
-		if (dirty || now_ms() - drawn > 400) {   /* now and then: a long line moves, the status */
+		if (dirty && !side && v.sel != old) {     /* only the two lines that changed */
+			int x, y, w, rows, rh;
+			list_geom(&v, &x, &y, &w, &rows, &rh);
+			if (v.sel >= v.top && v.sel < v.top + rows && old >= old_top && old < old_top + rows &&
+			    v.top == old_top) {
+				draw_row(&v, old - v.top, true);
+				draw_row(&v, v.sel - v.top, true);
+				dirty = false;
+			}
+		}
+		if (dirty || now_ms() - drawn > 1000) {   /* now and then: the status at the top */
 			dirty = false;
 			drawn = now_ms();
 			draw_list(&v);
+		} else {
+			move_long(&v, &moved);
 		}
 		if (test_mode && !keys_scripted())
 			return v.sel;
@@ -1202,43 +1507,72 @@ static int menu(const char *title, const char *const *items, int n, int sel, con
 	}
 }
 
-/* A box with a title and lines (big: the one in large type, a code to type) */
+static int menu(const char *title, const char *const *items, int n, int sel, const char *hint, bool overlay)
+{
+	return menu_ex(title, items, n, sel, hint, overlay, NULL);
+}
+
+/* A window with a title and lines: "#..." a heading, big >= 0 the line in large type (a code) */
 static void panel(const char *title, const char *const *lines, int n, int big)
 {
-	int x = 20, w = 760, h = 110 + n * 28 + (big >= 0 ? 40 : 0), y = (LAND_H - h) / 2;
-	if (panel_y >= 0 && (panel_y < y || panel_y + panel_h > y + h)) {
-		fill(x, panel_y, w, panel_h, C_BG);
-		present(x, panel_y, w, panel_h);
+	int h = 96;
+	for (int i = 0; i < n; i++)
+		h += i == big ? 78 : lines[i][0] == '#' ? 34 : 28;
+	int w = 700, x = (LAND_W - w) / 2, y = (LAND_H - h) / 2;
+	if (panel_y < 0) {                        /* the first window: what is behind it, darker */
+		dim(0, 0, LAND_W, LAND_H, 110);
+		memcpy(under, canvas, sizeof canvas);
+		present(0, 0, LAND_W, LAND_H);
+	} else {                                  /* the last one away (its shadow not drawn twice) */
+		int top = panel_y, end = panel_y + panel_h + 8;
+		if (end > LAND_H) end = LAND_H;
+		memcpy(canvas + top * LAND_W, under + top * LAND_W, (size_t)(end - top) * LAND_W * 4);
+		if (panel_y < y || panel_y + panel_h > y + h)
+			present(0, top, LAND_W, end - top);
 	}
 	panel_y = y;
 	panel_h = h;
-	fill(x, y, w, h, C_PANEL);
-	fill(x, y, w, 3, C_ACCENT);
-	fill(x, y + h - 2, w, 2, C_LINE);
-	text_fit(x + 24, y + 22, 3, C_ACCENT, title, (w - 48) / 24, true);
-	int yy = y + 70;
+	rrect_a(x + 4, y + 6, w, h, 18, 0x000000, 120);
+	box(x, y, w, h, 18, C_PANEL, C_LINE);
+	rrect(x + 22, y + 22, 6, 28, 3, C_ACCENT);
+	draw_text_fit(x + 38, y + 18, F_TITLE, C_TEXT, title, w - 60, true);
+	int yy = y + 66;
 	for (int i = 0; i < n; i++) {
 		if (i == big) {
-			text(x + 24, yy, 5, C_WARN, lines[i], 14);
-			yy += 48;
+			int f = face_has(F_HUGE, lines[i]) ? F_HUGE : F_TITLE;
+			int tw = text_w(f, lines[i]);
+			rrect(x + (w - tw) / 2 - 20, yy, tw + 40, 70, 14, C_BAR);
+			draw_text(x + (w - tw) / 2, yy + (70 - faces[f].height) / 2, f, C_WARN, lines[i]);
+			yy += 78;
+		} else if (lines[i][0] == '#') {
+			draw_text_fit(x + 28, yy + 4, F_BODY, C_ACCENT, lines[i] + 1, w - 56, false);
+			yy += 34;
 		} else {
-			text_fit(x + 24, yy, 2, C_TEXT, lines[i], (w - 48) / 16, false);
+			draw_text_fit(x + 28, yy, F_BODY, C_TEXT, lines[i], w - 56, false);
 			yy += 28;
 		}
 	}
-	present(x, y, w, h);
+	present(x, y, w + 6, h + 8);
 }
 
 /* A message until a key (or for ms milliseconds, if not 0) */
 static void message(const char *title, const char *const *lines, int n, unsigned ms)
 {
-	const char *all[12];
+	const char *all[16];
 	int k = 0;
-	for (int i = 0; i < n && k < 10; i++)
+	for (int i = 0; i < n && k < 14; i++)
 		all[k++] = lines[i];
 	if (!ms)
-		all[k++] = T("[ F2 / A / Enter: OK ]", "[ F2 / A / Enter: OK ]");
+		all[k++] = "";
 	panel(title, all, k, -1);
+	if (!ms) {                                /* the key that closes it, bottom right */
+		int h = 96;
+		for (int i = 0; i < k; i++)
+			h += all[i][0] == '#' ? 34 : 28;
+		int y = (LAND_H - h) / 2 + h - 40, x = (LAND_W + 700) / 2 - 24 - (text_w(F_SMALL, "F2 / A / Enter") + 21 + text_w(F_SMALL, "OK") + 18);
+		key_chip(x, y, "F2 / A / Enter", "OK");
+		present(x, y, 260, 24);
+	}
 	if (test_mode && !keys_scripted())
 		return;
 	input_settle();
@@ -1253,8 +1587,8 @@ static void message(const char *title, const char *const *lines, int n, unsigned
 	input_settle();
 }
 
-static const char *HINT_LIST_PL = "F2/A: wybierz  F1/B: wstecz  GEN: menu";
-static const char *HINT_LIST_EN = "F2/A: choose  F1/B: back  GEN: menu";
+static const char *HINT_LIST_PL = "F2 / A: wybierz  F1 / B: wstecz  GEN: menu";
+static const char *HINT_LIST_EN = "F2 / A: choose  F1 / B: back  GEN: menu";
 
 /* ------------------------------------------------------------------------------------------ */
 /* Sound                                                                                      */
@@ -2413,16 +2747,16 @@ static const char *bt_label(const struct btdev *d)
 /* BlueZ's reason, in words */
 static const char *bt_reason(const char *err)
 {
-	if (strstr(err, "AuthenticationFailed")) return T("Zly kod albo urzadzenie odmowilo.", "A wrong code, or the device refused.");
+	if (strstr(err, "AuthenticationFailed")) return T("Zły kod albo urządzenie odmówiło.", "A wrong code, or the device refused.");
 	if (strstr(err, "AuthenticationCanceled") || strstr(err, "AuthenticationRejected"))
-		return T("Urzadzenie odrzucilo parowanie.", "The device refused the pairing.");
-	if (strstr(err, "AuthenticationTimeout")) return T("Za dlugo: kod nie zostal wpisany.", "Too long: the code was not typed.");
+		return T("Urządzenie odrzuciło parowanie.", "The device refused the pairing.");
+	if (strstr(err, "AuthenticationTimeout")) return T("Za długo: kod nie został wpisany.", "Too long: the code was not typed.");
 	if (strstr(err, "ConnectionAttemptFailed") || strstr(err, "Page Timeout") || strstr(err, "not available") ||
 	    strstr(err, "Host is down"))
-		return T("Nie odpowiada: wlacz w nim parowanie.", "No answer: put it in pairing mode.");
-	if (strstr(err, "InProgress")) return T("Juz trwa: sprobuj za chwile.", "Already under way: try again soon.");
+		return T("Nie odpowiada: włącz w nim parowanie.", "No answer: put it in pairing mode.");
+	if (strstr(err, "InProgress")) return T("Już trwa: spróbuj za chwilę.", "Already under way: try again soon.");
 	if (strstr(err, "NotReady")) return T("Bluetooth nie jest gotowy.", "Bluetooth is not ready.");
-	return err[0] ? err : T("Nieznany blad.", "Unknown error.");
+	return err[0] ? err : T("Nieznany błąd.", "Unknown error.");
 }
 
 static bool bt_ready(void)
@@ -2432,7 +2766,7 @@ static bool bt_ready(void)
 	if (bt_started || getenv("NES_TEST_BTCTL")) {     /* it may still be coming up: a few seconds */
 		uint32_t until = now_ms() + 8000;
 		while (bt_fd < 0 && (int32_t)(now_ms() - until) < 0) {
-			const char *l[] = {T("Bluetooth sie uruchamia...", "Bluetooth is starting...")};
+			const char *l[] = {T("Bluetooth się uruchamia...", "Bluetooth is starting...")};
 			panel("Bluetooth", l, 1, -1);
 			bt_retry = 0;
 			poll_input();
@@ -2441,8 +2775,8 @@ static bool bt_ready(void)
 		if (bt_fd >= 0)
 			return true;
 	}
-	const char *l[] = {T("Bluetooth nie dziala.", "Bluetooth is not running."),
-	                   T("Szczegoly: nes-log.txt na karcie.", "Details: nes-log.txt on the card."),
+	const char *l[] = {T("Bluetooth nie działa.", "Bluetooth is not running."),
+	                   T("Szczegóły: nes-log.txt na karcie.", "Details: nes-log.txt on the card."),
 	                   T("bluetooth=1 w nes.txt?", "bluetooth=1 in nes.txt?")};
 	message("Bluetooth", l, 3, 0);
 	return false;
@@ -2457,7 +2791,7 @@ static bool bt_wait(const char *title, const char *what, unsigned secs, bool sho
 		unsigned el = (now_ms() - start) / 1000;
 		if (el >= secs) {
 			op_state = 3;
-			snprintf(op_err, sizeof op_err, T("Za dlugo bez odpowiedzi.", "No answer for too long."));
+			snprintf(op_err, sizeof op_err, T("Za długo bez odpowiedzi.", "No answer for too long."));
 			break;
 		}
 		char sec[64];
@@ -2505,7 +2839,7 @@ static void bt_pair(const char *mac)
 	bool ok = bt_wait(T("Parowanie", "Pairing"), name, 40, true);
 	logmsg("bt: pairing %s: %s %s", mac, ok ? "ok" : "failed", op_err);
 	if (!ok) {
-		const char *l[] = {name, T("Nie udalo sie sparowac:", "Pairing failed:"), bt_reason(op_err)};
+		const char *l[] = {name, T("Nie udało się sparować:", "Pairing failed:"), bt_reason(op_err)};
 		message("Bluetooth", l, 3, 0);
 		return;
 	}
@@ -2514,11 +2848,11 @@ static void bt_pair(const char *mac)
 	bt_send("trust %s", mac);
 	bt_start(OP_CONNECT, mac);
 	bt_send("connect %s", mac);
-	bool conn = bt_wait(T("Laczenie", "Connecting"), name, 15, false);
+	bool conn = bt_wait(T("Łączenie", "Connecting"), name, 15, false);
 	bt_keep("save", mac);
 	const char *l[] = {name, T("Sparowane.", "Paired."),
-	                   conn ? T("Polaczone: mozna grac.", "Connected: ready to play.")
-	                        : T("Polaczy sie samo, gdy je wlaczysz.", "It connects when you switch it on.")};
+	                   conn ? T("Połączone: można grać.", "Connected: ready to play.")
+	                        : T("Połączy się samo, gdy je włączysz.", "It connects when you switch it on.")};
 	message(T("Gotowe", "Done"), l, 3, 0);
 }
 
@@ -2534,12 +2868,12 @@ static void bt_scan(void)
 	const char *items[MAX_BT];
 	char title[64];
 	struct list_view v = {title, items, 0, 0, 0,
-	                      T("F2/A: paruj   F1/B: wstecz", "F2/A: pair   F1/B: back"),
-	                      T("Wlacz w urzadzeniu tryb parowania (pad: zwykle przytrzymaj jego przycisk parowania "
-	                        "kilka sekund). Pojawi sie na tej liscie.",
+	                      T("F2 / A: paruj  F1 / B: wstecz", "F2 / A: pair  F1 / B: back"),
+	                      T("Włącz w urządzeniu tryb parowania (pad: zwykle przytrzymaj jego przycisk parowania "
+	                        "kilka sekund). Pojawi się na tej liście.",
 	                        "Put the device in pairing mode (a pad: usually hold its pairing button a few seconds). "
 	                        "It shows up in this list."),
-	                      false};
+	                      false, NULL, false};
 	uint32_t drawn = 0;
 	input_settle();
 	for (;;) {
@@ -2610,16 +2944,16 @@ static void bt_paired(void)
 			if (!d->paired)
 				continue;
 			snprintf(macs[n], sizeof macs[n], "%.17s", d->mac);
-			snprintf(labels[n], sizeof labels[n], "%s %s", d->connected ? "*" : "-", bt_label(d));
+			snprintf(labels[n], sizeof labels[n], "%s %s", d->connected ? "●" : "○", bt_label(d));
 			items[n] = labels[n];
 			n++;
 		}
 		if (!n) {
-			const char *l[] = {T("Brak sparowanych urzadzen.", "No paired devices.")};
+			const char *l[] = {T("Brak sparowanych urządzeń.", "No paired devices.")};
 			message("Bluetooth", l, 1, 0);
 			return;
 		}
-		int c = menu(T("Sparowane  (* polaczone)", "Paired  (* connected)"), items, n, sel,
+		int c = menu(T("Sparowane  (● połączone)", "Paired  (● connected)"), items, n, sel,
 		             set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
 		if (c < 0)
 			return;
@@ -2629,28 +2963,28 @@ static void bt_paired(void)
 			continue;
 		char name[96];
 		snprintf(name, sizeof name, "%s", bt_label(d));
-		const char *acts[] = {d->connected ? T("Rozlacz", "Disconnect") : T("Polacz", "Connect"),
-		                      T("Usun (zapomnij)", "Remove (forget)"), T("Wroc", "Back")};
+		const char *acts[] = {d->connected ? T("Rozłącz", "Disconnect") : T("Połącz", "Connect"),
+		                      T("Usuń (zapomnij)", "Remove (forget)"), T("Wróć", "Back")};
 		int a = menu(name, acts, 3, 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
 		if (a == 0 && !d->connected) {
 			bt_start(OP_CONNECT, d->mac);
 			bt_send("connect %s", d->mac);
-			if (!bt_wait(T("Laczenie", "Connecting"), name, 15, false)) {
-				const char *l[] = {name, T("Nie polaczono:", "Not connected:"), bt_reason(op_err),
-				                   T("Wlacz urzadzenie i sprobuj znowu.", "Switch it on and try again.")};
+			if (!bt_wait(T("Łączenie", "Connecting"), name, 15, false)) {
+				const char *l[] = {name, T("Nie połączono:", "Not connected:"), bt_reason(op_err),
+				                   T("Włącz urządzenie i spróbuj znowu.", "Switch it on and try again.")};
 				message("Bluetooth", l, 4, 0);
 			}
 		} else if (a == 0) {
 			bt_start(OP_DISCONNECT, d->mac);
 			bt_send("disconnect %s", d->mac);
-			bt_wait(T("Rozlaczanie", "Disconnecting"), name, 8, false);
+			bt_wait(T("Rozłączanie", "Disconnecting"), name, 8, false);
 		} else if (a == 1) {
 			char mac[18];
 			snprintf(mac, sizeof mac, "%s", d->mac);
 			bt_send("remove %s", mac);
 			*d = btd[--n_btd];
 			bt_keep("forget", mac);
-			const char *l[] = {name, T("Usuniete.", "Removed.")};
+			const char *l[] = {name, T("Usunięte.", "Removed.")};
 			message("Bluetooth", l, 2, 1500);
 			sel = 0;
 		}
@@ -2671,13 +3005,13 @@ static void bt_menu(void)
 			conn += btd[i].paired && btd[i].connected;
 		}
 		char p_item[64];
-		snprintf(p_item, sizeof p_item, T("Sparowane (%d, polaczone %d)", "Paired (%d, %d connected)"),
+		snprintf(p_item, sizeof p_item, T("Sparowane (%d, połączone %d)", "Paired (%d, %d connected)"),
 		         paired, conn);
 		const char *items[] = {
 			T("Szukaj i paruj nowe", "Look for and pair new"), p_item,
-			on ? T("Bluetooth: wlaczony (wylacz)", "Bluetooth: on (switch off)")
-			   : T("Bluetooth: wylaczony (wlacz)", "Bluetooth: off (switch on)"),
-			T("Wroc", "Back"),
+			on ? T("Bluetooth: włączony (wyłącz)", "Bluetooth: on (switch off)")
+			   : T("Bluetooth: wyłączony (włącz)", "Bluetooth: off (switch on)"),
+			T("Wróć", "Back"),
 		};
 		int c = menu("Bluetooth", items, 4, sel, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
 		if (c < 0 || c == 3)
@@ -2717,16 +3051,16 @@ static void learn_snapshot(void)
 static void learn_pad(void)
 {
 	static const int order[] = {J_UP, J_DOWN, J_LEFT, J_RIGHT, J_A, J_B, J_SELECT, J_START, J_X, J_Y};
-	const char *names_pl[] = {"GORA", "DOL", "LEWO", "PRAWO", "A", "B", "SELECT", "START",
-	                          "A TURBO (lub GEN: pomin)", "B TURBO (lub GEN: pomin)"};
-	const char *names_en[] = {"UP", "DOWN", "LEFT", "RIGHT", "A", "B", "SELECT", "START",
-	                          "TURBO A (or GEN: skip)", "TURBO B (or GEN: skip)"};
+	const char *names_pl[] = {"▲  GÓRA", "▼  DÓŁ", "◀  LEWO", "▶  PRAWO", "A", "B", "SELECT", "START",
+	                          "A TURBO", "B TURBO"};
+	const char *names_en[] = {"▲  UP", "▼  DOWN", "◀  LEFT", "▶  RIGHT", "A", "B", "SELECT", "START",
+	                          "TURBO A", "TURBO B"};
 	bool any_pad = false;
 	for (int i = 0; i < n_devs; i++)
 		any_pad |= devs[i].role == ROLE_PAD;
 	if (!any_pad) {
-		const char *l[] = {T("Nie widze zadnego pada.", "No pad found."),
-		                   T("Podlacz pad USB albo sparuj", "Plug in a USB pad or pair"),
+		const char *l[] = {T("Nie widzę żadnego pada.", "No pad found."),
+		                   T("Podłącz pad USB albo sparuj", "Plug in a USB pad or pair"),
 		                   T("pad Bluetooth.", "a Bluetooth pad.")};
 		message(T("Przyciski pada", "Pad buttons"), l, 3, 0);
 		return;
@@ -2739,14 +3073,12 @@ static void learn_pad(void)
 	for (size_t k = 0; k < sizeof order / sizeof order[0]; k++) {
 		learn_got.kind = 0;
 		bool skipped = false;
-		int x = 100, y = 120, w = 600, h = 200;
-		fill(x, y, w, h, C_PANEL);
-		fill(x, y, w, 3, C_ACCENT);
-		text(x + 24, y + 22, 3, C_ACCENT, T("Przyciski pada", "Pad buttons"), 23);
-		text(x + 24, y + 74, 2, C_TEXT, T("Nacisnij na padzie:", "Press on the pad:"), 34);
-		text(x + 24, y + 110, 3, C_WARN, set_en ? names_en[k] : names_pl[k], 23);
-		text(x + 24, y + 160, 2, C_DIM, T("GEN na radiu: przerwij", "GEN on the radio: stop"), 34);
-		present(x, y, w, h);
+		char step[48];
+		snprintf(step, sizeof step, T("Krok %d z %d", "Step %d of %d"), (int)k + 1, (int)(sizeof order / sizeof order[0]));
+		const char *l[] = {T("Naciśnij na padzie:", "Press on the pad:"), set_en ? names_en[k] : names_pl[k], "",
+		                   k >= 8 ? T("GEN na radiu: pomiń ten przycisk", "GEN on the radio: skip this one")
+		                          : T("GEN na radiu: przerwij", "GEN on the radio: stop"), step};
+		panel(T("Przyciski pada", "Pad buttons"), l, 5, 1);
 		input_settle();
 		learn_snapshot();
 		uint32_t prev_radio = radio_bits;
@@ -2815,13 +3147,13 @@ static bool state_exists(int slot)
 static int game_menu(void)
 {
 	const char *items[M_N] = {
-		T("Wroc do gry", "Back to the game"), T("Zapisz stan", "Save state"),
+		T("Wróć do gry", "Back to the game"), T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
 		T("Reset gry", "Reset the game"), T("Sterowanie", "Controls"), T("Przyciski pada", "Pad buttons"),
 		T("Bluetooth", "Bluetooth"), T("Lista gier", "Game list"),
-		T("Restart do menu startowego", "Restart to the boot menu"), T("Wylacz radio", "Switch the radio off"),
+		T("Restart do menu startowego", "Restart to the boot menu"), T("Wyłącz radio", "Switch the radio off"),
 	};
-	int c = menu(cur_base, items, M_N, 0, T("F2/A: wybierz  GEN: do gry", "F2/A: choose  GEN: back to the game"), true);
+	int c = menu(cur_base, items, M_N, 0, T("F2 / A: wybierz  GEN: wróć do gry", "F2 / A: choose  GEN: back to the game"), true);
 	return c < 0 ? M_RESUME : c;
 }
 
@@ -2829,37 +3161,41 @@ static int game_menu(void)
 static void help(void)
 {
 	const char *pl[] = {
-		"RADIO: BAND/DFN/DFL krzyzak, F1 B, F2 A,",
-		"  PTT A, F3 Select, F4 Start, F5 turbo A,",
-		"  galki VFO i VOL kierunki, GEN menu",
-		"KLAWIATURA: strzalki, X A, Z B, Enter Start,",
-		"  Shift Select, C/V turbo, Esc menu,",
-		"  F2 zapis stanu, F4 odczyt stanu",
-		"PAD: gracz 1 i 2; menu: Home lub Sel+Start",
-		"MYSZ: pistolet Zapper (np. Duck Hunt)",
+		"#Radio",
+		"BAND ▲▼, DFN, DFL: krzyżak · F1: B · F2, PTT: A · F5: A turbo",
+		"F3: Select · F4, MFK: Start · gałki VFO, VOL: kierunki · GEN: menu",
+		"#Klawiatura",
+		"strzałki · X: A · Z: B · Enter: Start · Shift: Select · C/V: turbo",
+		"Esc: menu · F2: zapisz stan · F4: wczytaj stan",
+		"#Pad i mysz",
+		"pad 1 i 2 to gracze · Home albo Select+Start: menu",
+		"mysz: pistolet Zapper (np. Duck Hunt)",
 	};
 	const char *en[] = {
-		"RADIO: BAND/DFN/DFL d-pad, F1 B, F2 A,",
-		"  PTT A, F3 Select, F4 Start, F5 turbo A,",
-		"  VFO and VOL knobs move, GEN menu",
-		"KEYBOARD: arrows, X A, Z B, Enter Start,",
-		"  Shift Select, C/V turbo, Esc menu,",
-		"  F2 save state, F4 load state",
-		"PAD: players 1 and 2; menu: Home or Sel+Start",
-		"MOUSE: the Zapper light gun (e.g. Duck Hunt)",
+		"#Radio",
+		"BAND ▲▼, DFN, DFL: d-pad · F1: B · F2, PTT: A · F5: turbo A",
+		"F3: Select · F4, MFK: Start · VFO, VOL knobs: move · GEN: menu",
+		"#Keyboard",
+		"arrows · X: A · Z: B · Enter: Start · Shift: Select · C/V: turbo",
+		"Esc: menu · F2: save state · F4: load state",
+		"#Pad and mouse",
+		"pads 1 and 2 are the players · Home or Select+Start: menu",
+		"mouse: the Zapper light gun (e.g. Duck Hunt)",
 	};
-	message(T("Sterowanie", "Controls"), set_en ? en : pl, 8, 0);
+	message(T("Sterowanie", "Controls"), set_en ? en : pl, 9, 0);
 }
 
 /* A word over the game, top left */
 static void osd(const char *msg)
 {
-	int w = text_len(msg) * 16 + 32;
-	if (w > LAND_W) w = LAND_W;
-	fill(0, 0, w, 40, C_PANEL);
-	fill(0, 38, w, 2, C_ACCENT);
-	text(16, 12, 2, C_TEXT, msg, (LAND_W - 32) / 16);
-	present(0, 0, w, 40);
+	int w = text_w(F_BODY, msg) + 48;
+	if (w > LAND_W - 20) w = LAND_W - 20;
+	int x = (LAND_W - w) / 2;
+	fill(0, 0, LAND_W, 46, 0);
+	box(x, 6, w, 36, 18, C_PANEL, C_LINE);
+	rrect(x + 14, 20, 8, 8, 4, C_ACCENT);
+	draw_text_fit(x + 30, 13, F_BODY, C_TEXT, msg, w - 44, false);
+	present(0, 0, LAND_W, 46);
 }
 
 
@@ -2890,10 +3226,10 @@ static void play(int idx)
 	if (!data || !retro_load_game(&gi)) {
 		free(data);
 		logmsg("game: did not load");
-		const char *l[] = {cur_base, T("Tej gry nie da sie uruchomic", "This game does not start"),
+		const char *l[] = {cur_base, T("Tej gry nie da się uruchomić", "This game does not start"),
 		                   T("(uszkodzony plik albo FDS bez", "(a damaged file, or FDS without"),
 		                   T("NES/BIOS/disksys.rom).", "NES/BIOS/disksys.rom).")};
-		message(T("Blad", "Error"), l, 4, 0);
+		message(T("Błąd", "Error"), l, 4, 0);
 		cur_base[0] = 0;
 		return;
 	}
@@ -2912,7 +3248,7 @@ static void play(int idx)
 		fclose(lf);
 	}
 	if (state_exists(9)) {                     /* left in the middle last time */
-		const char *it[] = {T("Kontynuuj od miejsca wyjscia", "Continue where you left"),
+		const char *it[] = {T("Kontynuuj od miejsca wyjścia", "Continue where you left"),
 		                    T("Zacznij od nowa", "Start again")};
 		memset(canvas, 0, sizeof canvas);
 		int c = menu(cur_base, it, 2, 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
@@ -2937,7 +3273,10 @@ static void play(int idx)
 			int c = M_RESUME;
 			if (quick_save) c = M_SAVE;
 			else if (quick_load) c = M_LOAD;
-			else c = game_menu();
+			else {
+				fb_to_canvas();                   /* the game's picture behind the menu */
+				c = game_menu();
+			}
 			input_settle();
 			const char *msg = NULL;
 			switch (c) {
@@ -2969,8 +3308,8 @@ static void play(int idx)
 		} else if (osd_shown) {
 			osd_shown = false;
 			note_until = 0;
-			fill(0, 0, LAND_W, 40, 0);
-			present(0, 0, LAND_W, 40);
+			fill(0, 0, LAND_W, 46, 0);
+			present(0, 0, LAND_W, 46);
 		}
 		bool paced = sound_flush();
 		frames++;
@@ -3008,6 +3347,74 @@ static void play(int idx)
 	memset(canvas, 0, sizeof canvas);
 }
 
+/* Beside the game list: the chosen game (its saves, its size), or what the chosen thing does */
+static int list_games;
+
+static void game_side(int sel, int x, int y, int w, int h)
+{
+	box(x, y, w, h, 16, C_PANEL, C_LINE);
+	draw_pad(x + (w - 150) / 2, y + 20, 150);
+	int ty = y + 104;
+	if (sel < list_games) {
+		const char *path = game_path(sel);
+		const char *name = game_names[sel];
+		const char *slash = strrchr(name, '/');
+		int rows = draw_wrapped(x + 18, ty, F_LIST, C_TEXT, slash ? slash + 1 : name, w - 36, 28, 3);
+		ty += rows * 28 + 12;
+		char base[300], p[700];
+		snprintf(base, sizeof base, "%s", strrchr(path, '/') ? strrchr(path, '/') + 1 : path);
+		char *dot = strrchr(base, '.');
+		const char *ext = dot ? dot + 1 : "";
+		if (dot) *dot = 0;
+		struct stat st;
+		char line[96];
+		if (stat(path, &st) == 0) {
+			snprintf(line, sizeof line, "%s · %ld KB", ext, (long)(st.st_size + 1023) / 1024);
+			for (char *c = line; *c && *c != ' '; c++) *c = (char)toupper((unsigned char)*c);
+			draw_text(x + 18, ty, F_SMALL, C_DIM, line);
+			ty += 26;
+		}
+		if (slash) {
+			snprintf(line, sizeof line, T("folder: %.*s", "folder: %.*s"), (int)(slash - name), name);
+			draw_text_fit(x + 18, ty, F_SMALL, C_DIM, line, w - 36, false);
+			ty += 26;
+		}
+		ty += 6;
+		snprintf(p, sizeof p, "%s/%s.state9", saves_dir, base);
+		bool cont = access(p, R_OK) == 0;
+		snprintf(p, sizeof p, "%s/%s.srm", saves_dir, base);
+		bool srm = access(p, R_OK) == 0;
+		snprintf(p, sizeof p, "%s/%s.state0", saves_dir, base);
+		bool st0 = access(p, R_OK) == 0;
+		struct { bool on; const char *what; } marks[] = {
+			{cont, T("kontynuacja", "continue")}, {srm, T("zapis gry", "game save")}, {st0, T("zapisany stan", "saved state")},
+		};
+		for (int i = 0; i < 3; i++) {
+			if (!marks[i].on) continue;
+			rrect(x + 18, ty + 6, 8, 8, 4, C_ACCENT);
+			draw_text(x + 34, ty, F_SMALL, C_TEXT, marks[i].what);
+			ty += 24;
+		}
+	} else {
+		static const char *pl[] = {"Pady, klawiatury i myszy: szukanie, parowanie, lista sparowanych.",
+		                           "Własny układ przycisków pada, naciskany po kolei.",
+		                           "Z powrotem do menu wyboru systemu przy starcie radia.",
+		                           "Radio wyłącza się całkiem."};
+		static const char *en[] = {"Pads, keyboards and mice: looking, pairing, the paired list.",
+		                           "Your own pad layout, pressed in turn.",
+		                           "Back to the radio's boot menu, to choose a system.",
+		                           "The radio switches off."};
+		int k = sel - (list_games ? list_games : 1);
+		if (k >= 0 && k < 4)
+			draw_wrapped(x + 18, ty, F_BODY, C_DIM, set_en ? en[k] : pl[k], w - 36, 26, 8);
+		else
+			draw_wrapped(x + 18, ty, F_BODY, C_DIM,
+			             T("Wgraj gry .nes do folderu NES na partycji BOOT karty (widać ją na każdym komputerze).",
+			               "Put .nes games in the NES folder of the card's BOOT partition (any computer sees it)."),
+			             w - 36, 26, 8);
+	}
+}
+
 /* The list of games, and what else there is to do */
 static void game_list(void)
 {
@@ -3029,14 +3436,13 @@ static void game_list(void)
 		}
 		enum { X_PAIR, X_PAD, X_REBOOT, X_OFF, X_N };
 		const char *extra[X_N] = {
-			T("> Bluetooth", "> Bluetooth"),
-			T("> Przyciski pada", "> Pad buttons"),
-			T("> Restart do menu startowego", "> Restart to the boot menu"), T("> Wylacz radio", "> Switch the radio off"),
+			"› Bluetooth", T("› Przyciski pada", "› Pad buttons"),
+			T("› Restart do menu startowego", "› Restart to the boot menu"), T("› Wyłącz radio", "› Switch the radio off"),
 		};
 		static const char *items[MAX_GAMES + X_N + 1];
 		int n = 0;
 		if (!n_games)
-			items[n++] = T("(brak gier: wgraj pliki .nes", "(no games: put .nes files");
+			items[n++] = T("Brak gier: wgraj pliki .nes", "No games: put .nes files in");
 		for (int i = 0; i < n_games; i++)
 			items[n++] = game_names[i];
 		for (int i = 0; i < X_N; i++)
@@ -3046,7 +3452,8 @@ static void game_list(void)
 		snprintf(title, sizeof title, T("Gry NES (%d)", "NES games (%d)"), n_games);
 		const char *hint = n_games ? (set_en ? HINT_LIST_EN : HINT_LIST_PL)
 		                           : T("Gry: folder NES na partycji BOOT karty", "Games: the NES folder on the card's BOOT");
-		int c = menu(title, items, n, sel, hint, false);
+		list_games = n_games;
+		int c = menu_ex(title, items, n, sel, hint, false, game_side);
 		if (c < 0)
 			continue;
 		sel = c;
@@ -3057,8 +3464,8 @@ static void game_list(void)
 		if (c < base) {
 			const char *l[] = {T("Skopiuj gry (.nes, .fds, .unf)", "Copy games (.nes, .fds, .unf)"),
 			                   T("do folderu NES na partycji", "to the NES folder on the card's"),
-			                   T("BOOT karty (widac ja na", "BOOT partition (any computer"),
-			                   T("kazdym komputerze), albo dodaj", "sees it), or add them in"),
+			                   T("BOOT karty (widać ją na", "BOOT partition (any computer"),
+			                   T("każdym komputerze), albo dodaj", "sees it), or add them in"),
 			                   T("je w aplikacji przy karcie.", "the app with the card.")};
 			message(T("Brak gier", "No games"), l, 5, 0);
 			continue;
@@ -3246,12 +3653,16 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_signal);
 	screen_init();
 	/* a splash while the rest comes up */
-	fill(0, 0, LAND_W, LAND_H, C_BG);
-	fill(220, 150, 360, 160, C_PANEL);
-	fill(220, 150, 360, 3, C_ACCENT);
-	text(256, 176, 6, C_ACCENT, "NES", 3);
-	text(256, 250, 2, C_TEXT, T("emulator dla X6100", "emulator for the X6100"), 22);
-	text(256, 276, 2, C_DIM, "FCEUmm", 22);
+	fill_bg(0, 0, LAND_W, LAND_H);
+	draw_pad(290, 92, 220);
+	{
+		int tw = text_w(F_HUGE, "NES");
+		draw_text((LAND_W - tw) / 2, 212, F_HUGE, C_TEXT, "NES");
+		const char *sub = T("emulator dla Xiegu X6100", "emulator for the Xiegu X6100");
+		draw_text((LAND_W - text_w(F_BODY, sub)) / 2, 296, F_BODY, C_DIM, sub);
+		rrect(LAND_W / 2 - 23, 330, 46, 4, 2, C_ACCENT);
+		draw_text((LAND_W - text_w(F_SMALL, "FCEUmm")) / 2, 430, F_SMALL, C_LINE + 0x202020, "FCEUmm");
+	}
 	present(0, 0, LAND_W, LAND_H);
 	sound_open();
 	retro_set_environment(cb_env);
@@ -3276,7 +3687,7 @@ int main(int argc, char **argv)
 			if (k == 2) {                 /* the Bluetooth menu's look, Polish */
 				set_en = 0;
 				const char *items[] = {"Szukaj i paruj nowe", "Sparowane urzadzenia",
-				                       "Bluetooth: wlaczony (wylacz)", "Wroc"};
+				                       "Bluetooth: włączony (wyłącz)", "Wróć"};
 				menu("Bluetooth", items, 4, 0, HINT_LIST_PL, false);
 				const char *l[] = {"Klawiatura BT (klawiatura)", "Wpisz ten kod na klawiaturze i Enter:", "482917",
 				                   "4 s   (F1/B: przerwij)"};

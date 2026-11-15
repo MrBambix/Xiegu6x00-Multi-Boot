@@ -69,7 +69,7 @@ jobs:
       - name: Toolchain
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q gcc-arm-linux-gnueabihf e2fsprogs xz-utils
+          sudo apt-get install -y -q gcc-arm-linux-gnueabihf e2fsprogs xz-utils fonts-inter python3-pil
       - name: The NES emulator for the X6100 (Extras; FCEUmm, no games)
         run: ./extras/nes/build.sh
       - uses: actions/upload-artifact@v4

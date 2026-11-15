@@ -270,7 +270,7 @@ Systemy radia i ich loga należą do ich autorów; aplikacja pobiera je z ich wy
 Wygląd okna: motyw [Sun Valley](https://github.com/rdbende/Sun-Valley-ttk-theme) (sv-ttk, licencja MIT).
 Ikona Dooma jest narysowana dla tej aplikacji (napis czcionką Inter, licencja SIL OFL), ikona
 emulatora NES też (`tools/make_nes_icon.py`). Emulator NES: rdzeń FCEUmm (GPL-2.0), menu czcionką
-font8x8 (domena publiczna).
+Inter (SIL OFL 1.1, wypalaną przy budowaniu przez `extras/nes/make_font.py`).
 
 ---
 
