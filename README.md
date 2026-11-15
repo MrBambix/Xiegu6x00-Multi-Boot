@@ -133,10 +133,14 @@ drugi gracz 2, menu przyciskiem Home albo Select+Start razem. Działają pady HI
 D-input lub Switch, PS4 i Xbox przez Bluetooth, zwykłe pady USB); przewodowe pady Xbox 360 nie,
 bo jądro radia nie ma ich sterownika. Inny układ przycisków ustawisz w menu: **Przyciski pada**
 (zapisuje się w `NES/pads.txt`). Menu **Bluetooth** w emulatorze: parowanie padów, klawiatur i myszy
-(kod do wpisania pokazuje na ekranie), lista sparowanych (połącz, rozłącz, usuń), wł./wył. Bluetooth.
+(szuka na żywo, kod do wpisania pokazuje na ekranie), lista sparowanych (połącz, rozłącz, usuń),
+wł./wył. Bluetooth.
+
+Wyjście z gry zapamiętuje miejsce (przy następnym uruchomieniu „Kontynuuj od miejsca wyjścia”),
+lista gier zaczyna od ostatnio granej, a menu w grze ma ekran „Sterowanie” ze ściągą klawiszy.
 
 Ustawienia: plik `nes.txt` na partycji `BOOT` (`volume=`, `rxvol=`, `aspect=2x` albo `4:3`,
-`bluetooth=`, `lang=`). Dziennik: `nes-log.txt`.
+`mouse=` szybkość Zappera, `bluetooth=`, `lang=`). Dziennik: `nes-log.txt`.
 
 ## Systemy do pobrania w aplikacji
 
@@ -339,8 +343,13 @@ pierwszego systemu z obrazu na karcie (wszystkie potrzebne sterowniki są w nim 
 256×224 w 2× (albo 4:3), dźwięk przez tinyalsa (gra trzyma tempo bufora karty dźwiękowej),
 wejście z `/dev/input` (klawisze radia, klawiatury, myszy, pady HID), Bluetooth z systemu,
 z którego pochodzi jądro, w chroot (parowanie padów w menu, zapisywane na partycji emulatora).
-`build.sh` buduje rdzeń i nakładkę na ARM i na PC, sprawdza na PC własny testowy kartridż
-(niebieski ekran i ton 440 Hz: obraz i dźwięk) i składa partycję ext4 (bez żadnej gry).
+Bluetooth prowadzi rozmowę z `bluetoothctl` systemu, z którego pochodzi jądro, na pseudoterminalu:
+czyta każdą linię i sam odpowiada na pytania o potwierdzenie, kod i PIN.
+`build.sh` buduje rdzeń i nakładkę na ARM i na PC i sprawdza na PC: własny testowy kartridż
+(niebieski ekran i ton 440 Hz: obraz i dźwięk), Bluetooth z udawanym `bluetoothctl`
+(`test/fake_bluetoothctl.py`: parowanie z potwierdzeniem i z kodem klawiatury, łączenie) oraz
+wejście z potoków (`test/drive_input.py`: pad, klawiatura, mysz, nauka przycisków). Potem składa
+partycję ext4 (bez żadnej gry).
 
 ### Budowanie
 

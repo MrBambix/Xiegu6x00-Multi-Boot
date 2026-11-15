@@ -459,6 +459,7 @@ EN = {
     "# Wycisz odbiornik radia (szum w tle); 0: zostaw jak byl": "# Mute the radio's receiver (the background hiss); 0: leave it as it was",
     "# Obraz: 2x (ostry, 512x448) albo 4:3 (640x480)": "# Picture: 2x (sharp, 512x448) or 4:3 (640x480)",
     "# Bluetooth: pady, klawiatury i myszy (0: wylaczony)": "# Bluetooth: pads, keyboards and mice (0: off)",
+    "# Szybkosc myszy jako pistoletu Zapper 10..500 (%)": "# The mouse's speed as the Zapper light gun 10..500 (%)",
     "# Jezyk menu emulatora: pl albo en": "# The emulator's menu language: pl or en",
     "# Gry: folder NES na tej partycji (.nes, .fds, .unf, .nsf); zapisy: NES/SAVES; BIOS FDS: NES/BIOS/disksys.rom; dziennik: nes-log.txt":
         "# Games: the NES folder on this partition (.nes, .fds, .unf, .nsf); saves: NES/SAVES; FDS BIOS: "
@@ -525,13 +526,21 @@ Klawiatura, mysz, pady (USB i Bluetooth)
   Działają pady HID: 8BitDo (tryb D-input lub Switch), PS4 i Xbox przez Bluetooth, zwykłe pady USB.
   Pady Xbox 360 na kablu nie działają (jądro radia nie ma ich sterownika).
   Inny układ przycisków? Menu emulatora > Przyciski pada: naciskasz po kolei, zapisuje się.
-  Bluetooth w menu emulatora: parowanie padów, klawiatur i myszy (kod pokazuje na ekranie),
-  lista sparowanych (połącz, rozłącz, usuń), włączanie i wyłączanie Bluetooth.
+  Menu Bluetooth w emulatorze: szukanie na żywo i parowanie padów, klawiatur i myszy (kod do
+  wpisania na klawiaturze pokazuje się na ekranie), lista sparowanych (połącz, rozłącz, usuń),
+  włączanie i wyłączanie Bluetooth. Podłączony pad, klawiaturę i mysz pokazuje napis na ekranie.
+
+Gra
+  Wyjście z gry zapamiętuje miejsce: przy następnym uruchomieniu „Kontynuuj od miejsca wyjścia”.
+  Menu w grze (GEN): zapis i odczyt stanu, reset, „Sterowanie” (ściąga klawiszy), przyciski pada,
+  Bluetooth, lista gier, restart do menu startowego, wyłączenie radia. Lista gier zaczyna od
+  ostatnio granej.
   Pady, klawiatury i myszy sparowane wcześniej w pierwszym systemie też się łączą.
 
 Ustawienia
   Plik nes.txt na partycji BOOT: volume= (0–200 %), rxvol= (0–55) głośnik radia,
-  aspect=2x (ostry obraz) albo aspect=4:3, bluetooth=0 wyłącza BT, lang=pl lub en.
+  aspect=2x (ostry obraz) albo aspect=4:3, mouse= szybkość myszy jako Zappera (10–500 %),
+  bluetooth=0 wyłącza BT, lang=pl lub en.
   Dziennik: nes-log.txt na partycji BOOT.
 """,
     "en": """Doom on the X6100
@@ -588,13 +597,20 @@ Keyboard, mouse, pads (USB and Bluetooth)
   HID pads work: 8BitDo (D-input or Switch mode), PS4 and Xbox over Bluetooth, plain USB pads.
   Wired Xbox 360 pads do not (the radio's kernel has no driver for them).
   Another button layout? The emulator's menu > Pad buttons: press them in turn, it is saved.
-  Bluetooth in the emulator's menu: pairing pads, keyboards and mice (a code is shown on the
-  screen), the paired list (connect, disconnect, remove), Bluetooth on and off.
+  The emulator's Bluetooth menu: a live search and pairing of pads, keyboards and mice (a code to
+  type on the keyboard is shown on the screen), the paired list (connect, disconnect, remove),
+  Bluetooth on and off. A pad, keyboard or mouse coming in is named on the screen.
+
+Playing
+  Leaving a game keeps its place: "Continue where you left" the next time. The in-game menu
+  (GEN): save and load state, reset, "Controls" (a key sheet), pad buttons, Bluetooth, the game
+  list, restart to the boot menu, radio off. The game list starts at the game played last.
   Pads, keyboards and mice paired earlier in the first system connect too.
 
 Settings
   The nes.txt file on the BOOT partition: volume= (0–200 %), rxvol= (0–55) the radio's speaker,
-  aspect=2x (sharp) or aspect=4:3, bluetooth=0 switches BT off, lang=pl or en.
+  aspect=2x (sharp) or aspect=4:3, mouse= the mouse's speed as the Zapper (10–500 %),
+  bluetooth=0 switches BT off, lang=pl or en.
   Log: nes-log.txt on the BOOT partition.
 """,
 }

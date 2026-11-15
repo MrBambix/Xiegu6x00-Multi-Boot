@@ -505,6 +505,7 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
             t("# Wyjscie dzwieku procesora do plyty radia 0..63") + "\r\nheadphone=47\r\n" +
             t("# Tryb odtwarzania plyty radia (jak OpenX6X00); 0: wylaczony") + "\r\nrecord=1\r\n" +
             t("# Obraz: 2x (ostry, 512x448) albo 4:3 (640x480)") + "\r\naspect=2x\r\n" +
+            t("# Szybkosc myszy jako pistoletu Zapper 10..500 (%)") + "\r\nmouse=100\r\n" +
             t("# Bluetooth: pady, klawiatury i myszy (0: wylaczony)") + "\r\nbluetooth=1\r\n" +
             t("# Jezyk menu emulatora: pl albo en") + "\r\nlang=" + lang() + "\r\n" +
             t("# Gry: folder NES na tej partycji (.nes, .fds, .unf, .nsf); zapisy: NES/SAVES; "

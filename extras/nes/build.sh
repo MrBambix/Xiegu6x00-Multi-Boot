@@ -32,6 +32,12 @@ build() {   # build CC OUTDIR EXTRA_FLAGS...
     done
     $cc -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -I"$RI" -I"$TA/include" "$@" \
         -c "$HERE/nes_x6100.c" -o "$out/nes_x6100.o"
+    # A name the front end takes from the C library must not be one the core defines too: the
+    # static link takes the core's (FCEUmm's global "sync" variable stood in for sync() so)
+    local clash
+    clash=$(comm -12 <(nm -u "$out/nes_x6100.o" | awk '{print $2}' | grep -v '^retro_' | sort -u) \
+        <(nm -g --defined-only $(find "$out/fceumm/src" -name '*.o') | awk 'NF==3{print $3}' | sort -u))
+    if [ -n "$clash" ]; then echo "names the core defines too: $clash"; exit 1; fi
 }
 
 # The radio's: ARMv7, hard float, one static binary
@@ -88,6 +94,32 @@ loud = sum(1 for v in s if abs(v) > 500)
 print("PC test sound: %.2f s, %d%% of samples above -36 dBFS" % (n / 2 / 48000, 100 * loud // max(n, 1)))
 assert n > 48000 and loud > n // 4, "no tone came out"
 PY
+    # Bluetooth, with a pretend bluetoothctl (BlueZ 5.65's words): a pad asking to confirm, a
+    # keyboard showing a code, both paired; the paired list, a device connected. The keys: the
+    # list -> Bluetooth -> look, pair the pad -> OK -> look, pair the keyboard -> OK -> paired ->
+    # the first -> connect -> back out
+    T=$W/pctest && mkdir -p "$T/roms" "$T/in" && cp "$W/test.nes" "$T/roms/"
+    (cd "$T" && NES_TEST_LOG="$T/bt.log" NES_TEST_FB=480x800 NES_TEST_ROMS="$T/roms" \
+        NES_TEST_BTCTL="$HERE/test/fake_bluetoothctl.py" \
+        NES_TEST_KEYS="wwwdowowwwwwwwwwowwwwwwwowwowwwwwwwwwowwwwwwwwwwwwowwdowwwowowwwbbbbb" \
+        timeout 120 "$W/nes-pc")
+    grep -q "Confirm passkey 123456 (yes/no):  (answered)" "$T/bt.log"
+    test "$(grep -c 'bt: pairing BB:00:00:00:00:0[12]: ok' "$T/bt.log")" = 2
+    grep -q "bt> connect AA:00:00:00:00:01" "$T/bt.log"
+    echo "PC test Bluetooth: pairing with a confirmation and with a keyboard code, connecting: ok"
+    # Pads, keyboard, mouse from FIFOs: the bits each gives, Select+Start as the menu, a pad's
+    # buttons learnt (an analog trigger at rest taken for none)
+    for f in pad kbd mouse; do mkfifo "$T/in/$f"; done
+    (cd "$T" && NES_TEST_LOG="$T/in.log" NES_TEST_FB=480x800 NES_TEST_ROMS="$T/roms" \
+        NES_TEST_DEVS="pad:$T/in/pad,kbd:$T/in/kbd,mouse:$T/in/mouse" \
+        NES_TEST_KEYS="$(printf 'w%.0s' $(seq 1 85))" timeout 120 "$W/nes-pc") &
+    sleep 1
+    python3 "$HERE/test/drive_input.py" "$T/in" > "$T/drive.log"
+    wait
+    for bits in 00180 00040 00100 00008 10000 00001; do grep -q "test bits p1=$bits" "$T/in.log"; done
+    grep -q "UP=A17- DOWN=A17+ LEFT=A0- RIGHT=A0+ A=K308" "$T/roms/pads.txt"
+    grep -q "B=K307 TB=K318 SELECT=K310 START=K311" "$T/roms/pads.txt"
+    echo "PC test input: pad, keyboard, the menu combination, learnt buttons: ok"
     cp "$W/frame.raw" "$OUT/test-frame-480x800-bgrx.raw"
     cp "$W/menu.raw" "$OUT/test-menu-480x800-bgrx.raw"
     cp "$W/bt.raw" "$OUT/test-bt-480x800-bgrx.raw"
