@@ -147,6 +147,22 @@ PY
     grep -q "UP=A17- DOWN=A17+ LEFT=A0- RIGHT=A0+ A=K308" "$T/roms/pads.txt"
     grep -q "B=K307 TB=K318 SELECT=K310 START=K311" "$T/roms/pads.txt"
     echo "PC test input: pad, keyboard, the menu combination, learnt buttons: ok"
+    # The game's pace with the sound thread and a pretend card 0.4 % fast (as the radio's): the
+    # game at 60 frames/s, the ring kept, no gaps once it plays
+    rm -rf "$T/pace" && mkdir -p "$T/pace" && cp "$W/test.nes" "$T/pace/"   # no saves: no question first
+    (cd "$T" && NES_TEST_SNDTHREAD=1 NES_TEST_LOG="$T/pace.log" NES_TEST_FB=480x800 NES_TEST_ROMS="$T/pace" \
+        NES_TEST_KEYS="wwwowo$(printf 'w%.0s' $(seq 1 110))" timeout 150 "$W/nes-pc" >/dev/null 2>&1)
+    python3 - "$T/pace.log" <<'PY'
+import re, sys
+st = [l for l in open(sys.argv[1]) if "the card took" in l]
+assert len(st) >= 4, "too few sound lines"
+fps = [float(re.search(r"\] ([\d.]+) frames/s", l).group(1)) for l in st[1:]]
+short = [int(re.search(r"(\d+) short", l).group(1)) for l in st[1:]]
+under = [int(re.search(r"(\d+) underruns", l).group(1)) for l in st[1:]]
+print("PC test pace: %s frames/s, gaps %s, underruns %s" % (fps, short, under))
+assert all(59.5 < f < 60.7 for f in fps), "the game is not at 60 frames/s"
+assert short[-1] == short[0] and under[-1] == 0, "the sound ran dry"
+PY
     cp "$W/frame.raw" "$OUT/test-frame-480x800-bgrx.raw"
     cp "$W/menu.raw" "$OUT/test-menu-480x800-bgrx.raw"
     cp "$W/bt.raw" "$OUT/test-bt-480x800-bgrx.raw"
