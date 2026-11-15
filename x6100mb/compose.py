@@ -12,7 +12,7 @@ OpenX6X00 finds DATA by its label and mounts the third partition in fstab: both 
 system gets root=/dev/mmcblk0pN for its own partition.
 """
 import os
-from .i18n import t
+from .i18n import lang, t
 import random
 import re
 
@@ -62,20 +62,64 @@ DOOM_NAME = "DOOM"
 # and where on the panel they go (the rail's rows are the framebuffer's columns)
 ANIM_FRAMES, ANIM_ADDR, ANIM_STEP, ANIM_X = 16, 0x44000000, 0x10000, 376
 DOOM_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "doom.png")
+NES_NAME = "NES"
+NES_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "nes.png")
+# The app's extras: their root filesystem (bundled in the app) and their tile's icon
+EXTRAS = {"doom": ("doom-x6100-rootfs.ext4.xz", DOOM_LOGO), "nes": ("nes-x6100-rootfs.ext4.xz", NES_LOGO)}
+# The NES emulator's games: what it plays, in the NES folder of the card's BOOT partition
+NES_GAMES = (".nes", ".fds", ".unf", ".unif", ".nsf")
+NES_ROOM_MB = 64          # room on BOOT for the games added later and the saves
 
 
 def resolve_extras(entries, rootfs_xz=None):
-    """The app's extras (Doom) as systems of their own: their root filesystem, booted with the
-    kernel and device tree of the first system from an image on the list"""
-    if not any(e["kind"] == "doom" for e in entries):
+    """The app's extras (Doom, the NES emulator) as systems of their own: their root filesystem,
+    booted with the kernel and device tree of the first system from an image on the list.
+    rootfs_xz: {kind: a root filesystem's .ext4.xz} instead of the bundled ones (a path: Doom's)"""
+    if not any(e["kind"] in EXTRAS for e in entries):
         return entries
+    if isinstance(rootfs_xz, str):
+        rootfs_xz = {"doom": rootfs_xz}
+    rootfs_xz = rootfs_xz or {}
     from .image import ExtraSystem, cache_dir, extra_rootfs
     donor = next((e["sys"] for e in entries if e["kind"] == "sd"), None)
     out = []
     for e in entries:
-        if e["kind"] == "doom":
-            e = dict(e, kind="sd", sys=ExtraSystem(e["name"], extra_rootfs(cache_dir(), rootfs_xz), donor))
+        if e["kind"] in EXTRAS:
+            kind = e["kind"]
+            rootfs = extra_rootfs(cache_dir(), rootfs_xz.get(kind), name=EXTRAS[kind][0])
+            e = dict(e, kind="sd", extra=kind, sys=ExtraSystem(e["name"], rootfs, donor, extra=kind))
         out.append(e)
+    return out
+
+
+def extra_of(entry):
+    """Which extra an entry is ("doom", "nes"), or None"""
+    if entry.get("kind") in EXTRAS:
+        return entry["kind"]
+    return entry.get("extra") or getattr(entry.get("sys"), "extra", None)
+
+
+def nes_games(paths):
+    """The NES games to put on the card, from files and .zip archives: [(file name, bytes or path)]"""
+    import zipfile
+    out, seen = [], set()
+    for p in paths:
+        if p.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(p) as z:
+                    for info in z.infolist():
+                        name = os.path.basename(info.filename)
+                        if not info.is_dir() and name.lower().endswith(NES_GAMES) and info.file_size < 16 << 20:
+                            if name.lower() not in seen:
+                                seen.add(name.lower())
+                                out.append((name, z.read(info)))
+            except (zipfile.BadZipFile, OSError) as e:
+                raise ComposeError("%s: %s" % (os.path.basename(p), e))
+        elif p.lower().endswith(NES_GAMES):
+            name = os.path.basename(p)
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                out.append((name, p))
     return out
 
 
@@ -83,8 +127,9 @@ def tile(entry):
     """What the graphic menu shows for an entry: its name, a logo of one's own, else the project's"""
     if entry.get("logo"):
         return {"name": entry["name"], "logo": entry["logo"]}
-    if entry["kind"] == "doom" or getattr(entry.get("sys"), "donor", None) is not None:
-        return {"name": entry["name"], "logo": DOOM_LOGO}
+    extra = extra_of(entry)
+    if extra or getattr(entry.get("sys"), "donor", None) is not None:
+        return {"name": entry["name"], "logo": EXTRAS.get(extra or "doom")[1]}
     logo = project_logo(entry)
     crop = None
     if logo:
@@ -336,6 +381,12 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
             e["sys"].donor_part = next((x["part"] for x in sd if x["sys"] is donor), None)
 
     kernels = sum(sum(len(v) for v in e["sys"].files.values()) for e in sd)
+    # the NES emulator's games go on BOOT (any computer sees it), with room for more and the saves
+    nes = [e for e in sd if extra_of(e) == "nes"]
+    games = nes_games([g for e in nes for g in e.get("games", [])])
+    if nes:
+        kernels += sum(len(g) if isinstance(g, bytes) else os.path.getsize(g) for _n, g in games)
+        kernels += NES_ROOM_MB * MIB
     pictures = (len(entries) + 1) * 400 * 1024 if gfx else 0
     boot_size = _up(max(64 * MIB, kernels + pictures + boot_extra_mb * MIB + 4 * MIB) // SECTOR) * SECTOR
 
@@ -445,7 +496,30 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
         where = (f"{e['dir']}, root /dev/mmcblk0p{e['part']}" if e["kind"] == "sd" else "eMMC")
         readme.append(f"F{i + 1}  {e['name']}  ({where})")
     fat.add_file("menu.txt", ("\r\n".join(readme) + "\r\n").encode())
-    if any(getattr(e.get("sys"), "donor", None) is not None for e in sd):
+    if nes:
+        # The emulator's settings, read at its start (extras/nes/nes_x6100.c), and the games
+        fat.add_file("nes.txt", (
+            t("# Emulator NES: glosnosc 0..200 (%)") + "\r\nvolume=100\r\n" +
+            t("# Glosnosc glosnika radia (AF) 0..55") + "\r\nrxvol=20\r\n" +
+            t("# Wycisz odbiornik radia (szum w tle); 0: zostaw jak byl") + "\r\nrxmute=0\r\n" +
+            t("# Wyjscie dzwieku procesora do plyty radia 0..63") + "\r\nheadphone=47\r\n" +
+            t("# Tryb odtwarzania plyty radia (jak OpenX6X00); 0: wylaczony") + "\r\nrecord=1\r\n" +
+            t("# Obraz: 2x (ostry, 512x448) albo 4:3 (640x480)") + "\r\naspect=2x\r\n" +
+            t("# Bluetooth: pady, klawiatury i myszy (0: wylaczony)") + "\r\nbluetooth=1\r\n" +
+            t("# Jezyk menu emulatora: pl albo en") + "\r\nlang=" + lang() + "\r\n" +
+            t("# Gry: folder NES na tej partycji (.nes, .fds, .unf, .nsf); zapisy: NES/SAVES; "
+              "BIOS FDS: NES/BIOS/disksys.rom; dziennik: nes-log.txt") + "\r\n").encode())
+        fat.add_file("NES/" + t("WGRAJ-TU-GRY.txt"), (
+            t("Wgraj tu swoje gry NES (.nes, .fds, .unf, .nsf). Emulator pokaze je na liscie.") + "\r\n" +
+            t("Podfoldery tez dzialaja. Zapisy gier: folder SAVES. BIOS do gier FDS: BIOS/disksys.rom.") +
+            "\r\n").encode())
+        for name, g in games:
+            if isinstance(g, bytes):
+                fat.add_file("NES/" + name, g)
+            else:
+                fat.add_file("NES/" + name, src=(g, 0, os.path.getsize(g)))
+    if any(extra_of(e) == "doom" or (getattr(e.get("sys"), "donor", None) is not None and not extra_of(e))
+           for e in sd):
         # Doom's settings, read at its start (extras/doom/x6100_sound.c)
         fat.add_file("doom.txt", (
             t("# Doom: glosnosc efektow i muzyki 0..200 (%)") + "\r\nvolume=100\r\nmusic=100\r\n" +

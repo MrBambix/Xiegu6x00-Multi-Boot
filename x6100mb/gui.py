@@ -11,7 +11,7 @@ import webbrowser
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import backup, devices, i18n
-from .compose import DOOM_LOGO, DOOM_NAME, MAX_ENTRIES, MAX_SECS, XIEGU_DEFAULTS, compose, resolve_extras
+from .compose import DOOM_LOGO, DOOM_NAME, NES_LOGO, NES_NAME, MAX_ENTRIES, MAX_SECS, XIEGU_DEFAULTS, compose, resolve_extras
 from .i18n import t
 from .image import SourceSystem, cache_dir, open_source
 from .writer import Progress, write_device, write_image_file
@@ -657,6 +657,13 @@ class App:
             donor = next((x for x in self.entries if x["kind"] == "sd"), None)
             return (t("klasyczny Doom (Freedoom); jądro i parowania Bluetooth z: {name}", name=donor["name"])
                     if donor else t("klasyczny Doom (Freedoom), z jądrem pierwszego systemu z obrazu na liście"))
+        if e["kind"] == "nes":
+            donor = next((x for x in self.entries if x["kind"] == "sd"), None)
+            games = len(e.get("games", []))
+            text = (t("emulator NES; jądro i Bluetooth z: {name}", name=donor["name"]) if donor
+                    else t("emulator NES, z jądrem pierwszego systemu z obrazu na liście"))
+            return text + "  ·  " + (t("gier do wgrania: {n}", n=games) if games
+                                     else t("bez gier: dodaj je przyciskiem „Gry NES…” albo później do folderu NES"))
         info = e["sys"].summary()
         if e["sys"].warnings:
             info += "  ⚠ " + "; ".join(e["sys"].warnings)
@@ -684,7 +691,8 @@ class App:
         if key not in self._tile_jobs:
             self._tile_jobs.add(key)
             threading.Thread(target=self._tile_job, args=(dict(e), key), daemon=True).start()
-        return {"name": e["name"], "logo": e.get("logo") or (DOOM_LOGO if e["kind"] == "doom" else None)}
+        own = {"doom": DOOM_LOGO, "nes": NES_LOGO}.get(e["kind"])
+        return {"name": e["name"], "logo": e.get("logo") or own}
 
     def _tile_job(self, e, key):
         from .compose import tile
@@ -810,19 +818,67 @@ class App:
         return self._analyse(path, catalog.label(source, rel))
 
     def _build_extras(self, col):
-        """Extras: Doom, the easter egg (a tile of its own, not among the systems to fetch)"""
+        """Extras: Doom and the NES emulator (tiles of their own, not among the systems to fetch)"""
         ttk.Label(col, text="EXTRAS", font=_font(9, "bold"), foreground=HINT).pack(anchor="w", pady=(14, 4))
-        self._doom_img = None
+        self._doom_img = self._nes_img = None
         try:
             from . import menu_gfx
             if menu_gfx.HAVE_PIL:
                 c = PAGE_BG
-                self._doom_img = self._photo(menu_gfx.load_logo(
-                    DOOM_LOGO, size=28, bg=tuple(int(c[k:k + 2], 16) for k in (1, 3, 5))))
+                bg = tuple(int(c[k:k + 2], 16) for k in (1, 3, 5))
+                self._doom_img = self._photo(menu_gfx.load_logo(DOOM_LOGO, size=28, bg=bg))
+                self._nes_img = self._photo(menu_gfx.load_logo(NES_LOGO, size=28, bg=bg))
         except Exception:
-            self._doom_img = None
+            self._doom_img = self._nes_img = None
         ColorButton(col, "+ Doom", "secondary", self.add_doom, image=self._doom_img, pady=5).pack(fill="x")
+        ColorButton(col, t("+ Emulator NES"), "secondary", self.add_nes, image=self._nes_img,
+                    pady=5).pack(fill="x", pady=(6, 0))
+        ColorButton(col, t("Gry NES…"), "secondary", self.nes_games).pack(fill="x", pady=(6, 0))
         ColorButton(col, t("Przeczytaj najpierw"), "danger", self.doom_readme).pack(fill="x", pady=(6, 0))
+
+    def add_nes(self):
+        if any(e["kind"] == "nes" for e in self.entries):
+            return
+        if len(self.entries) >= MAX_ENTRIES:
+            messagebox.showwarning(APP, t("Menu ma najwyżej {n} pozycji (F1–F{n}).", n=MAX_ENTRIES))
+            return
+        if not any(e["kind"] == "sd" for e in self.entries):
+            messagebox.showinfo(APP, t("Emulator NES uruchamia się z jądrem systemu z obrazu (np. OpenX6X00). "
+                                       "Dodaj najpierw taki system, potem emulator."))
+            return
+        self.entries.append({"kind": "nes", "name": NES_NAME, "games": []})
+        self._redraw(len(self.entries) - 1)
+
+    def nes_games(self):
+        """The user's own NES games for the card (files or .zip archives of them); none come with the app"""
+        nes = next((e for e in self.entries if e["kind"] == "nes"), None)
+        if nes is None:
+            self.add_nes()
+            nes = next((e for e in self.entries if e["kind"] == "nes"), None)
+            if nes is None:
+                return
+        paths = filedialog.askopenfilenames(
+            title=t("Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi)"),
+            filetypes=[(t("Gry NES"), "*.nes *.NES *.fds *.FDS *.unf *.UNF *.unif *.nsf *.NSF *.zip *.ZIP"),
+                       (t("Wszystkie pliki"), "*")])
+        if not paths:
+            return
+        from .compose import ComposeError, nes_games
+        try:
+            found = nes_games(list(paths))
+        except ComposeError as e:
+            messagebox.showerror(APP, str(e))
+            return
+        if not found:
+            messagebox.showwarning(APP, t("W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf)."))
+            return
+        have = {os.path.basename(p).lower() for p in nes["games"]}
+        nes["games"] = list(nes["games"]) + [p for p in paths if os.path.basename(p).lower() not in have]
+        self.selected = self.entries.index(nes)
+        self._redraw(self.selected)
+        messagebox.showinfo(APP, t("Gry NES do wgrania na kartę: {n}. Trafią do folderu NES na partycji BOOT; "
+                                   "później możesz dokładać kolejne prosto z komputera.",
+                                   n=len(nes_games(nes["games"]))))
 
     def add_doom(self):
         if any(e["kind"] == "doom" for e in self.entries):
@@ -847,7 +903,7 @@ class App:
         except tk.TclError:
             pass
         win = self._readme = tk.Toplevel(self.root)
-        win.title(t("Doom: przeczytaj najpierw"))
+        win.title(t("Doom i emulator NES: przeczytaj najpierw"))
         win.transient(self.root)
         txt = tk.Text(win, wrap="word", width=96, height=34, padx=16, pady=12, relief="flat",
                       font=_font(11), bg=PAGE_BG, fg=TEXT_FG, highlightthickness=0,

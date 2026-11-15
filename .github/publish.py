@@ -56,6 +56,8 @@ przyciskiem **+ Z internetu…**, prosto z wydań ich autorów. Instrukcja: READ
 
 W sekcji **Extras** aplikacji: klasyczny Doom na radiu (Freedoom), z dźwiękiem i muzyką na głośniku radia,
 myszą i klawiaturą USB albo Bluetooth.
+Także **emulator NES** (FCEUmm): Twoje własne gry (aplikacja nie zawiera żadnych), pady USB i Bluetooth
+dla dwóch graczy, klawiatura, mysz jako pistolet Zapper, zapisy gier.
 
 Ostatnia zmiana: {msg or 'zobacz historię zmian'}
 

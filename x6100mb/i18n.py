@@ -430,6 +430,44 @@ EN = {
     "domyslny": "default",
     # the Read first window
     "Doom: przeczytaj najpierw": "Doom: read first",
+    "Doom i emulator NES: przeczytaj najpierw": "Doom and the NES emulator: read first",
+    # the NES emulator
+    "+ Emulator NES": "+ NES emulator",
+    "Gry NES…": "NES games…",
+    "emulator NES; jądro i Bluetooth z: {name}": "NES emulator; kernel and Bluetooth from: {name}",
+    "emulator NES, z jądrem pierwszego systemu z obrazu na liście":
+        "NES emulator, with the kernel of the first system from an image on the list",
+    "gier do wgrania: {n}": "games to put on the card: {n}",
+    "bez gier: dodaj je przyciskiem „Gry NES…” albo później do folderu NES":
+        "no games: add them with \"NES games…\" or later to the NES folder",
+    "Emulator NES uruchamia się z jądrem systemu z obrazu (np. OpenX6X00). Dodaj najpierw taki system, potem emulator.":
+        "The NES emulator starts with the kernel of a system from an image (e.g. OpenX6X00). Add such a system "
+        "first, then the emulator.",
+    "Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi)": "Your NES games (.nes, .fds, .unf, .nsf or a .zip of them)",
+    "Gry NES": "NES games",
+    "Wszystkie pliki": "All files",
+    "W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf).":
+        "The chosen files hold no NES games (.nes, .fds, .unf, .nsf).",
+    "Gry NES do wgrania na kartę: {n}. Trafią do folderu NES na partycji BOOT; później możesz dokładać kolejne prosto z komputera.":
+        "NES games for the card: {n}. They go to the NES folder on the BOOT partition; you can add more "
+        "later straight from a computer.",
+    "Emulator NES potrzebuje na karcie także systemu z obrazu (np. OpenX6X00): uruchamia się z jego jądrem":
+        "The NES emulator needs a system from an image on the card too (e.g. OpenX6X00): it starts with its kernel",
+    "ta wersja aplikacji nie ma w sobie emulatora NES": "this build of the app has no NES emulator in it",
+    "# Emulator NES: glosnosc 0..200 (%)": "# NES emulator: volume 0..200 (%)",
+    "# Glosnosc glosnika radia (AF) 0..55": "# The radio's speaker (AF) volume 0..55",
+    "# Wycisz odbiornik radia (szum w tle); 0: zostaw jak byl": "# Mute the radio's receiver (the background hiss); 0: leave it as it was",
+    "# Obraz: 2x (ostry, 512x448) albo 4:3 (640x480)": "# Picture: 2x (sharp, 512x448) or 4:3 (640x480)",
+    "# Bluetooth: pady, klawiatury i myszy (0: wylaczony)": "# Bluetooth: pads, keyboards and mice (0: off)",
+    "# Jezyk menu emulatora: pl albo en": "# The emulator's menu language: pl or en",
+    "# Gry: folder NES na tej partycji (.nes, .fds, .unf, .nsf); zapisy: NES/SAVES; BIOS FDS: NES/BIOS/disksys.rom; dziennik: nes-log.txt":
+        "# Games: the NES folder on this partition (.nes, .fds, .unf, .nsf); saves: NES/SAVES; FDS BIOS: "
+        "NES/BIOS/disksys.rom; log: nes-log.txt",
+    "WGRAJ-TU-GRY.txt": "PUT-GAMES-HERE.txt",
+    "Wgraj tu swoje gry NES (.nes, .fds, .unf, .nsf). Emulator pokaze je na liscie.":
+        "Put your NES games here (.nes, .fds, .unf, .nsf). The emulator lists them.",
+    "Podfoldery tez dzialaja. Zapisy gier: folder SAVES. BIOS do gier FDS: BIOS/disksys.rom.":
+        "Subfolders work too. Saves: the SAVES folder. The BIOS for FDS games: BIOS/disksys.rom.",
 }
 
 DOOM_README = {
@@ -465,6 +503,35 @@ Dźwięk
   rxvol= (0–55, domyślnie 45) to głośność głośnika radia, headphone= (0–63) poziom wyjścia
   do płyty radia (przy trzeszczeniu mniej), rxmute=1 przycisza odbiornik, bluetooth=0 wyłącza BT.
   Dziennik: doom-log.txt na partycji BOOT (co Doom zobaczył: dźwięk, USB, Bluetooth).
+Emulator NES
+
+Gry: nie ma żadnej w aplikacji, wgrywasz własne (.nes, .fds, .unf, .nsf; .zip z nimi też):
+przyciskiem „Gry NES…” przy tworzeniu karty albo później, kopiując je do folderu NES na
+partycji BOOT karty (widać ją na każdym komputerze). Podfoldery działają. Zapisy gier (baterie
+i stany) w NES/SAVES. Gry z dyskietek FDS potrzebują NES/BIOS/disksys.rom.
+Emulator też uruchamia się z jądrem PIERWSZEGO systemu z obrazu na liście.
+
+Sterowanie radiem (gracz 1)
+  BAND ▲/▼, DFN, DFL: krzyżak    F1: B    F2 lub PTT: A    F3: Select    F4 lub MFK: Start
+  F5: A turbo    Gałka VFO: lewo/prawo    Gałka VOL: góra/dół    GEN lub VOL: menu emulatora
+  W menu: gałki i krzyżak wybierają, F2 zatwierdza, F1 wraca. POWER: wyłączenie radia.
+
+Klawiatura, mysz, pady (USB i Bluetooth)
+  Klawiatura: strzałki lub WASD, X/K = A, Z/J = B, Enter = Start, Shift lub spacja = Select,
+  C/V = turbo A/B, Esc = menu, F2/F4 = szybki zapis/odczyt stanu.
+  Mysz to pistolet Zapper w grach, które go używają (np. Duck Hunt): celujesz, lewy strzela.
+  W menu kółko przewija, lewy wybiera, prawy wraca.
+  Pady: pierwszy to gracz 1, drugi gracz 2. Menu: przycisk Home albo Select+Start razem.
+  Działają pady HID: 8BitDo (tryb D-input lub Switch), PS4 i Xbox przez Bluetooth, zwykłe pady USB.
+  Pady Xbox 360 na kablu nie działają (jądro radia nie ma ich sterownika).
+  Inny układ przycisków? Menu emulatora > Przyciski pada: naciskasz po kolei, zapisuje się.
+  Pad Bluetooth parujesz w samym emulatorze: Menu > Paruj pad Bluetooth (pad w trybie parowania).
+  Pady, klawiatury i myszy sparowane wcześniej w pierwszym systemie też się łączą.
+
+Ustawienia
+  Plik nes.txt na partycji BOOT: volume= (0–200 %), rxvol= (0–55) głośnik radia,
+  aspect=2x (ostry obraz) albo aspect=4:3, bluetooth=0 wyłącza BT, lang=pl lub en.
+  Dziennik: nes-log.txt na partycji BOOT.
 """,
     "en": """Doom on the X6100
 
@@ -498,5 +565,34 @@ Sound
   rxvol= (0–55, 45 by default) is the radio speaker's volume, headphone= (0–63) the level to the
   radio's board (lower if it crackles), rxmute=1 quiets the receiver, bluetooth=0 switches BT off.
   Log: doom-log.txt on the BOOT partition (what Doom found: sound, USB, Bluetooth).
+NES emulator
+
+Games: none comes with the app, you add your own (.nes, .fds, .unf, .nsf; .zip archives of them
+too): with the "NES games…" button when you make the card, or later by copying them to the NES
+folder on the card's BOOT partition (any computer sees it). Subfolders work. Saves (battery and
+states) go to NES/SAVES. FDS disk games need NES/BIOS/disksys.rom.
+The emulator, too, starts with the kernel of the FIRST system from an image on the list.
+
+The radio's controls (player 1)
+  BAND ▲/▼, DFN, DFL: the d-pad    F1: B    F2 or PTT: A    F3: Select    F4 or MFK: Start
+  F5: turbo A    VFO knob: left/right    VOL knob: up/down    GEN or VOL: the emulator's menu
+  In the menus: the knobs and the d-pad choose, F2 confirms, F1 goes back. POWER: radio off.
+
+Keyboard, mouse, pads (USB and Bluetooth)
+  Keyboard: arrows or WASD, X/K = A, Z/J = B, Enter = Start, Shift or Space = Select,
+  C/V = turbo A/B, Esc = menu, F2/F4 = quick save/load state.
+  The mouse is the Zapper light gun in the games that use it (e.g. Duck Hunt): aim, left fires.
+  In the menus the wheel scrolls, left chooses, right goes back.
+  Pads: the first is player 1, the second player 2. Menu: the Home button, or Select+Start together.
+  HID pads work: 8BitDo (D-input or Switch mode), PS4 and Xbox over Bluetooth, plain USB pads.
+  Wired Xbox 360 pads do not (the radio's kernel has no driver for them).
+  Another button layout? The emulator's menu > Pad buttons: press them in turn, it is saved.
+  Pair a Bluetooth pad in the emulator itself: Menu > Pair a Bluetooth pad (the pad in pairing mode).
+  Pads, keyboards and mice paired earlier in the first system connect too.
+
+Settings
+  The nes.txt file on the BOOT partition: volume= (0–200 %), rxvol= (0–55) the radio's speaker,
+  aspect=2x (sharp) or aspect=4:3, bluetooth=0 switches BT off, lang=pl or en.
+  Log: nes-log.txt on the BOOT partition.
 """,
 }

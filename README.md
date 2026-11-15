@@ -110,6 +110,33 @@ partycji dziennik `doom-log.txt`: co znalazł (dźwięk, USB, Bluetooth), przyda
 
 Wyjście z gry wraca do menu startowego.
 
+## Extras: emulator NES
+
+Kafelek **+ Emulator NES** dodaje do menu radia emulator NES/Famicom (rdzeń
+[FCEUmm](https://github.com/libretro/libretro-fceumm), obsługuje też kartridże z Pegasusa).
+Uruchamia się, jak Doom, z jądrem pierwszego systemu z obrazu na liście.
+
+**Gry:** aplikacja nie zawiera żadnej gry. Własne (`.nes`, `.fds`, `.unf`, `.nsf`, także w `.zip`)
+dodajesz przyciskiem **Gry NES…** przy tworzeniu karty albo później: kopiujesz je do folderu `NES`
+na partycji `BOOT` karty (widać ją na każdym komputerze). Podfoldery działają. Zapisy gier
+(baterie i stany) trafiają do `NES/SAVES`, gry z dyskietek FDS potrzebują `NES/BIOS/disksys.rom`.
+
+**Sterowanie radiem (gracz 1):** BAND ▲/▼, DFN i DFL to krzyżak, F1 to B, F2 lub PTT to A,
+F3 Select, F4 lub wciśnięty MFK to Start, F5 A turbo. Gałka VFO lewo/prawo, gałka VOL góra/dół.
+GEN otwiera menu emulatora (zapis i odczyt stanu, reset, przyciski pada, parowanie Bluetooth,
+lista gier, restart do menu startowego, wyłączenie). POWER wyłącza radio.
+
+**Klawiatura, mysz, pady (USB i Bluetooth):** klawiatura: strzałki lub WASD, X/K = A, Z/J = B,
+Enter = Start, Shift lub spacja = Select, C/V = turbo, Esc = menu, F2/F4 = szybki zapis/odczyt.
+Mysz to pistolet Zapper w grach, które go używają (np. Duck Hunt). Pady: pierwszy to gracz 1,
+drugi gracz 2, menu przyciskiem Home albo Select+Start razem. Działają pady HID (8BitDo w trybie
+D-input lub Switch, PS4 i Xbox przez Bluetooth, zwykłe pady USB); przewodowe pady Xbox 360 nie,
+bo jądro radia nie ma ich sterownika. Inny układ przycisków ustawisz w menu: **Przyciski pada**
+(zapisuje się w `NES/pads.txt`). Pad Bluetooth parujesz w samym emulatorze: **Paruj pad Bluetooth**.
+
+Ustawienia: plik `nes.txt` na partycji `BOOT` (`volume=`, `rxvol=`, `aspect=2x` albo `4:3`,
+`bluetooth=`, `lang=`). Dziennik: `nes-log.txt`.
+
 ## Systemy do pobrania w aplikacji
 
 | System | Źródło |
@@ -224,13 +251,21 @@ music, on the radio's knobs and keys, a USB mouse and keyboard on the HOST port,
 paired in the first image-based system of the list. The **Read first** button next to the Doom
 tile explains the controls and the pairing; `doom.txt` on the card's BOOT partition sets the volume.
 
+**Extras: NES emulator.** The [FCEUmm](https://github.com/libretro/libretro-fceumm) core with an
+X6100 front end. No game comes with it: add your own (`.nes`, `.fds`, `.unf`, `.nsf`, or `.zip`s of
+them) with **NES games…**, or later in the `NES` folder of the card's BOOT partition. The radio's
+keys and knobs, USB and Bluetooth keyboards, mice (the Zapper) and HID pads for two players; pads
+are paired and their buttons set in the emulator's own menu (GEN). Settings: `nes.txt`.
+
 ## Licencja
 
 Aplikacja: **GPL-3.0** ([LICENSE](LICENSE)), © SQ6RT. Poprawka U-Boot w `uboot/` (inicjalizacja
 ekranu przeniesiona ze sterownika Linuksa X6100) jest, jak U-Boot, na licencji GPL-2.0-or-later.
 Systemy radia i ich loga należą do ich autorów; aplikacja pobiera je z ich wydań i repozytoriów.
 Wygląd okna: motyw [Sun Valley](https://github.com/rdbende/Sun-Valley-ttk-theme) (sv-ttk, licencja MIT).
-Ikona Dooma jest narysowana dla tej aplikacji (napis czcionką Inter, licencja SIL OFL).
+Ikona Dooma jest narysowana dla tej aplikacji (napis czcionką Inter, licencja SIL OFL), ikona
+emulatora NES też (`tools/make_nes_icon.py`). Emulator NES: rdzeń FCEUmm (GPL-2.0), menu czcionką
+font8x8 (domena publiczna).
 
 ---
 
@@ -295,6 +330,16 @@ uruchamiana jako `/sbin/init` własnego, małego systemu plików: obraz 320×200
 na obróconym framebufferze, klawisze i gałki z `/dev/input`. `build.sh` buduje ją statycznie na
 ARM, dokłada Freedoom i składa partycję ext4; aplikacja ma ją w sobie i uruchamia z jądrem
 pierwszego systemu z obrazu na karcie (wszystkie potrzebne sterowniki są w nim wbudowane).
+
+### Emulator NES (`extras/nes/`)
+
+`nes_x6100.c` to mała nakładka libretro z rdzeniem FCEUmm wlinkowanym statycznie, też jako
+`/sbin/init` własnego systemu plików: menu gier i ustawień rysowane na framebufferze, obraz
+256×224 w 2× (albo 4:3), dźwięk przez tinyalsa (gra trzyma tempo bufora karty dźwiękowej),
+wejście z `/dev/input` (klawisze radia, klawiatury, myszy, pady HID), Bluetooth z systemu,
+z którego pochodzi jądro, w chroot (parowanie padów w menu, zapisywane na partycji emulatora).
+`build.sh` buduje rdzeń i nakładkę na ARM i na PC, sprawdza na PC własny testowy kartridż
+(niebieski ekran i ton 440 Hz: obraz i dźwięk) i składa partycję ext4 (bez żadnej gry).
 
 ### Budowanie
 

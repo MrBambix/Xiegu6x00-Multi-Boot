@@ -374,10 +374,14 @@ class ExtraSystem:
     """A system of the app's own extras (the Doom easter egg): its root filesystem image, booted
     with the kernel and device tree of a system already on the card (the donor)"""
 
-    def __init__(self, name, rootfs_path, donor):
+    def __init__(self, name, rootfs_path, donor, extra="doom"):
         if donor is None or not getattr(donor, "files", None) or "kernel" not in donor.files:
-            raise ImageError(t("Doom potrzebuje na karcie także systemu z obrazu (np. OpenX6X00): "
+            if extra == "doom":
+                raise ImageError(t("Doom potrzebuje na karcie także systemu z obrazu (np. OpenX6X00): "
+                                   "uruchamia się z jego jądrem"))
+            raise ImageError(t("Emulator NES potrzebuje na karcie także systemu z obrazu (np. OpenX6X00): "
                                "uruchamia się z jego jądrem"))
+        self.extra = extra
         self.name = name
         self.path = rootfs_path
         self.raw = rootfs_path
@@ -408,21 +412,23 @@ class ExtraSystem:
         return t("rootfs {mb} MB, jądro z: {name}", mb=self.root_size >> 20, name=self.donor.name)
 
 
-def extra_rootfs(cache, xz_path=None, progress=None):
-    """The Doom root filesystem, unpacked into the cache (from xz_path, or the bundled one)"""
+def extra_rootfs(cache, xz_path=None, progress=None, name="doom-x6100-rootfs.ext4.xz"):
+    """An extra's root filesystem (Doom's by default), unpacked into the cache (from xz_path, or
+    the bundled one called name)"""
     import lzma
     if xz_path is None:
         import sys
         bases = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")]
         if hasattr(sys, "_MEIPASS"):
             bases.insert(0, os.path.join(sys._MEIPASS, "x6100mb", "data"))
-        xz_path = next((os.path.join(b, "doom-x6100-rootfs.ext4.xz") for b in bases
-                        if os.path.isfile(os.path.join(b, "doom-x6100-rootfs.ext4.xz"))), None)
+        xz_path = next((os.path.join(b, name) for b in bases if os.path.isfile(os.path.join(b, name))), None)
         if xz_path is None:
-            raise ImageError(t("ta wersja aplikacji nie ma w sobie Dooma"))
+            raise ImageError(t("ta wersja aplikacji nie ma w sobie Dooma") if name.startswith("doom")
+                             else t("ta wersja aplikacji nie ma w sobie emulatora NES"))
     st = os.stat(xz_path)
     os.makedirs(cache, exist_ok=True)
-    out = os.path.join(cache, f"doom-x6100-rootfs.{int(st.st_mtime)}.{st.st_size}.ext4")
+    stem = os.path.basename(xz_path).split(".")[0]
+    out = os.path.join(cache, f"{stem}.{int(st.st_mtime)}.{st.st_size}.ext4")
     if os.path.exists(out):
         return out
     with lzma.open(xz_path) as src, open(out + ".part", "wb") as dst:
