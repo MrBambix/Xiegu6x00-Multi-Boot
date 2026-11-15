@@ -279,6 +279,13 @@ static void at_exit(void)
 		sleep(5);
 		sync();
 		reboot(RB_AUTOBOOT);
+		/* still here: no restart in this kernel; the radio off rather than a kernel panic */
+		logmsg("restart failed: switching off");
+		x6100_radio_poweroff();
+		sleep(1);
+		reboot(RB_POWER_OFF);
+		for (;;)
+			pause();
 	}
 }
 

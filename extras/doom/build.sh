@@ -24,6 +24,12 @@ G="$W/doomgeneric/doomgeneric/g_game.c"
 sed -i 's/\tmousex = ev->data2\*/\tmousex += ev->data2*/; s/\tmousey = ev->data3\*/\tmousey += ev->data3*/' "$G"
 sed -i 's/cmd->angleturn -= mousex\*0x8;/cmd->angleturn -= (mousex > 4000 ? 4000 : mousex < -4000 ? -4000 : mousex)*0x8;/' "$G"
 grep -q 'mousex += ev->data2' "$G" && grep -q 'mousex > 4000' "$G"
+# Quit: doomgeneric's I_Quit runs Doom's exit functions but never ends the program (its exit(0)
+# sits under ORIGCODE), so the game stayed on the screen; it ends now, and the X6100 layer's
+# atexit restarts the radio to the boot menu
+S="$W/doomgeneric/doomgeneric/i_system.c"
+perl -0pi -e 's/(\n#if ORIGCODE\n    SDL_Quit\(\);\n\n    exit\(0\);\n#endif\n)/$1    exit(0);\n/' "$S"
+perl -0ne 'exit(/#endif\n    exit\(0\);\n/ ? 0 : 1)' "$S"
 git clone -q https://github.com/tinyalsa/tinyalsa "$W/tinyalsa"
 git -C "$W/tinyalsa" checkout -q $TA_COMMIT
 TA=$W/tinyalsa
