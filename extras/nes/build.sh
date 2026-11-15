@@ -47,31 +47,51 @@ build() {   # build CC OUTDIR EXTRA_FLAGS...
 build arm-linux-gnueabihf-gcc "$W/arm" -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard
 arm-linux-gnueabihf-gcc -static -s -o "$W/nes" "$W"/arm/*.o $(find "$W/arm/fceumm/src" -name '*.o') -lm -lpthread
 
-# A test cartridge of our own (NROM, 16 KB + 8 KB): a light blue screen and a 440 Hz tone
+# A test cartridge of our own (NROM, 16 KB + 8 KB), alive to see and hear: every second the
+# screen turns blue with a 440 Hz tone, then green and quiet (a frozen game shows at once)
 python3 - "$W/test.nes" <<'PY'
 import sys
-code = bytes([
-    0x78, 0xD8,                    # SEI, CLD
-    0xA2, 0x40, 0x8E, 0x17, 0x40,  # LDX #$40, STX $4017
-    0xA2, 0xFF, 0x9A, 0xE8,        # LDX #$FF, TXS, INX
-    0x8E, 0x00, 0x20, 0x8E, 0x01, 0x20, 0x8E, 0x10, 0x40,   # $2000 $2001 $4010 = 0
-    0x2C, 0x02, 0x20, 0x10, 0xFB,  # vblank 1
-    0x2C, 0x02, 0x20, 0x10, 0xFB,  # vblank 2
-    0xA9, 0x3F, 0x8D, 0x06, 0x20, 0xA9, 0x00, 0x8D, 0x06, 0x20,   # PPU address $3F00
-    0xA9, 0x21, 0x8D, 0x07, 0x20,  # the backdrop: light blue
-    0xA9, 0x00, 0x8D, 0x06, 0x20, 0x8D, 0x06, 0x20,              # address back to 0
-    0xA9, 0x0A, 0x8D, 0x01, 0x20,  # background on
-    0xA9, 0x01, 0x8D, 0x15, 0x40,  # pulse 1 on
-    0xA9, 0xBF, 0x8D, 0x00, 0x40,  # duty 50 %, constant volume 15
-    0xA9, 0xFD, 0x8D, 0x02, 0x40, 0xA9, 0x00, 0x8D, 0x03, 0x40,   # timer 253: 440 Hz
-    0x4C, 0x47, 0xC0,              # loop: JMP to itself
-    0x40,                          # NMI / IRQ: RTI
-])
-loop = code.index(bytes([0x4C, 0x47, 0xC0]))
-code = code[:loop] + bytes([0x4C, loop & 0xFF, 0xC0 | (loop >> 8)]) + code[loop + 3:]
-rti = 0xC000 + len(code) - 1
-prg = bytearray(code.ljust(0x4000, b"\xff"))
-prg[0x3FFA:0x4000] = bytes([rti & 0xFF, rti >> 8, 0x00, 0xC0, rti & 0xFF, rti >> 8])
+code, labels, fix = bytearray(), {}, []
+def op(*b): code.extend(b)
+def label(n): labels[n] = 0xC000 + len(code)
+def jmp_abs(opc, n): code.append(opc); fix.append(("abs", len(code), n)); code.extend(b"\0\0")
+def branch(opc, n): code.append(opc); fix.append(("rel", len(code), n)); code.append(0)
+def sta(a): op(0x8D, a & 0xFF, a >> 8)
+def lda(v): op(0xA9, v)
+label("reset")
+op(0x78, 0xD8, 0xA2, 0x40, 0x8E, 0x17, 0x40, 0xA2, 0xFF, 0x9A, 0xE8)      # SEI CLD, frame IRQ off, stack
+op(0x8E, 0x00, 0x20, 0x8E, 0x01, 0x20, 0x8E, 0x10, 0x40, 0x86, 0x00, 0x86, 0x01)
+for v in ("vb1", "vb2"):                                                   # two vblanks: the PPU ready
+    label(v); op(0x2C, 0x02, 0x20); branch(0x10, v)
+lda(0x3F); sta(0x2006); lda(0x00); sta(0x2006); lda(0x21); sta(0x2007)  # the backdrop: blue
+lda(0x00); sta(0x2006); sta(0x2006)
+lda(0x0A); sta(0x2001)                                                     # background on
+lda(0x01); sta(0x4015); lda(0xBF); sta(0x4000); lda(0xFD); sta(0x4002); lda(0x00); sta(0x4003)  # 440 Hz
+lda(0x80); sta(0x2000)                                                     # NMI on
+label("loop"); jmp_abs(0x4C, "loop")
+label("nmi")
+op(0x48, 0xE6, 0x00, 0xA5, 0x00, 0xC9, 60); branch(0xD0, "done")          # every 60 frames:
+op(0xA9, 0x00, 0x85, 0x00, 0xA5, 0x01, 0x49, 0x01, 0x85, 0x01)            # the phase turns
+lda(0x3F); sta(0x2006); lda(0x00); sta(0x2006)
+op(0xA5, 0x01); branch(0xF0, "blue"); lda(0x2A); branch(0xD0, "set")       # green or blue
+label("blue"); lda(0x21)
+label("set"); sta(0x2007)
+lda(0x00); sta(0x2006); sta(0x2006); sta(0x2005); sta(0x2005)
+op(0xA5, 0x01, 0x49, 0x01); sta(0x4015); branch(0xF0, "done")             # the tone on with blue
+lda(0x00); sta(0x4003)
+label("done"); op(0x68, 0x40)                                              # PLA RTI
+label("irq"); op(0x40)
+for kind, at, n in fix:
+    t = labels[n]
+    if kind == "abs":
+        code[at], code[at + 1] = t & 0xFF, t >> 8
+    else:
+        d = t - (0xC000 + at + 1)
+        assert -128 <= d < 128
+        code[at] = d & 0xFF
+prg = bytearray(bytes(code).ljust(0x4000, b"\xff"))
+for i, n in enumerate(("nmi", "reset", "irq")):
+    prg[0x3FFA + 2 * i], prg[0x3FFB + 2 * i] = labels[n] & 0xFF, labels[n] >> 8
 open(sys.argv[1], "wb").write(b"NES\x1a\x01\x01\x00\x00" + bytes(8) + bytes(prg) + bytes(0x2000))
 PY
 
@@ -79,7 +99,7 @@ PY
 if command -v gcc >/dev/null; then
     build gcc "$W/pc"
     gcc -o "$W/nes-pc" "$W"/pc/*.o $(find "$W/pc/fceumm/src" -name '*.o') -lm -lpthread
-    (cd "$W" && NES_TEST_FB=480x800 NES_TEST_FRAMES=120 NES_TEST_OUT=frame.raw NES_TEST_MENU_OUT=menu.raw NES_TEST_BT_OUT=bt.raw NES_TEST_PCM=sound.raw \
+    (cd "$W" && NES_TEST_FB=480x800 NES_TEST_FRAMES=150 NES_TEST_OUT=frame.raw NES_TEST_MENU_OUT=menu.raw NES_TEST_BT_OUT=bt.raw NES_TEST_PCM=sound.raw \
         NES_TEST_ROM="$W/test.nes" timeout 120 ./nes-pc > pc-test.log 2>&1)
     test "$(stat -c %s "$W/frame.raw")" = 1536000
     python3 - "$W/frame.raw" "$W/sound.raw" <<'PY'
@@ -87,15 +107,18 @@ import struct, sys
 fb = open(sys.argv[1], "rb").read()
 # the screen is portrait 480x800, the game landscape: count the game's light blue (R<G<B, B high)
 px = struct.unpack("<%dI" % (len(fb) // 4), fb)
-blue = sum(1 for p in px if (p & 0xff) > 0xc0 and ((p >> 16) & 0xff) < 0xa0)
-print("PC test picture: %d light blue pixels" % blue)
+blue = sum(1 for p in px if ((p & 0xff) > 0xc0 or ((p >> 8) & 0xff) > 0xc0) and ((p >> 16) & 0xff) < 0xa0)
+print("PC test picture: %d light blue or green pixels" % blue)
 assert blue > 50000, "the game's picture did not come out"
 d = open(sys.argv[2], "rb").read()
 n = len(d) // 2
 s = struct.unpack("<%dh" % n, d[:n * 2])
 loud = sum(1 for v in s if abs(v) > 500)
 print("PC test sound: %.2f s, %d%% of samples above -36 dBFS" % (n / 2 / 48000, 100 * loud // max(n, 1)))
-assert n > 48000 and loud > n // 4, "no tone came out"
+assert n > 48000 and loud > n // 6, "no tone came out"
+peak = max(abs(v) for v in s)
+print("PC test sound: peak %d (of 32767)" % peak)
+assert peak > 12000, "too quiet"
 PY
     # Bluetooth, with a pretend bluetoothctl (BlueZ 5.65's words): a pad asking to confirm, a
     # keyboard showing a code, both paired; the paired list, a device connected. The keys: the

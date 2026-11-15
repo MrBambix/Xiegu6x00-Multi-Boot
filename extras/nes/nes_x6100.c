@@ -438,31 +438,6 @@ static void dim(int x, int y, int w, int h, unsigned keep)
 		}
 }
 
-/* What is on the screen now (the game's picture) into the canvas */
-static void fb_to_canvas(void)
-{
-	for (int ly = 0; ly < LAND_H; ly++)
-		for (int lx = 0; lx < LAND_W; lx++) {
-			unsigned fx, fy;
-			land_to_fb((unsigned)lx, (unsigned)ly, &fx, &fy);
-			uint32_t p = 0;
-			if (fx < fb_w && fy < fb_h) {
-				const uint8_t *d = fb + fy * fb_stride + fx * fb_bpp;
-				if (fb_native) {
-					p = *(const uint32_t *)d & 0xffffff;
-				} else if (fb_bpp == 4) {
-					uint32_t v = *(const uint32_t *)d;
-					p = (((v >> vinfo.red.offset) & 0xff) << 16) | (((v >> vinfo.green.offset) & 0xff) << 8) |
-					    ((v >> vinfo.blue.offset) & 0xff);
-				} else {
-					uint16_t v = *(const uint16_t *)d;
-					p = ((v & 0xf800u) << 8) | ((v & 0x07e0u) << 5) | ((v & 0x1fu) << 3);
-				}
-			}
-			canvas[ly * LAND_W + lx] = p;
-		}
-}
-
 /* ---- text: Inter, smooth, with the Polish letters (font_inter.h, made by make_font.py) ---- */
 static uint32_t next_cp(const char **s)
 {
@@ -1598,7 +1573,65 @@ static unsigned snd_rate = 48000;
 static FILE *test_pcm;
 static int16_t abuf[48000 / 30 * 2 * 4];
 static size_t abuf_n;                 /* frames */
-static unsigned xruns;
+static unsigned xruns, snd_writes;
+
+/* The sound goes to the card from a thread of its own, as Doom's (extras/doom/x6100_sound.c):
+ * 512 frames at a time, the card started at once. The game keeps its time by the clock and never
+ * waits for the card; a ring between them takes the small difference of the two clocks */
+#define PERIOD 512
+#define RING   8192                   /* mono frames */
+static int16_t ring[RING];
+static unsigned ring_w, ring_r;       /* positions, ring_w - ring_r frames in it */
+static pthread_mutex_t ring_lock = PTHREAD_MUTEX_INITIALIZER;
+static volatile bool snd_running;
+
+/* Up to 20000 as it is, above that bent smoothly towards 32767: loud moments rounder, not cut */
+static int16_t soft_limit(int32_t v)
+{
+	const int32_t knee = 20000, room = 32767 - 20000;
+	int32_t a = v < 0 ? -v : v;
+	if (a > knee) {
+		int64_t over = a - knee;
+		a = knee + (int32_t)(over * room / (over + room));
+	}
+	return (int16_t)(v < 0 ? -a : a);
+}
+
+static void *snd_thread(void *arg)
+{
+	(void)arg;
+	static int16_t out[PERIOD * 2];
+	int16_t last = 0;
+	while (snd_running) {
+		pthread_mutex_lock(&ring_lock);
+		unsigned have = ring_w - ring_r;
+		if (have > PERIOD * 6)                /* too far behind (a menu was open): the oldest go */
+			ring_r = ring_w - PERIOD * 2, have = PERIOD * 2;
+		for (unsigned i = 0; i < PERIOD; i++) {
+			int16_t v;
+			if (i < have) {
+				v = ring[(ring_r + i) % RING];
+				last = v;
+			} else {                      /* nothing yet: fading to silence, no click */
+				last = (int16_t)(last * 15 / 16);
+				v = last;
+			}
+			out[2 * i] = out[2 * i + 1] = v;
+		}
+		ring_r += have < PERIOD ? have : PERIOD;
+		pthread_mutex_unlock(&ring_lock);
+		int r = pcm_writei(pcm, out, PERIOD);
+		if (r < 0) {
+			if (xruns++ < 5)
+				logmsg("sound: write: %s", pcm_get_error(pcm));
+			pcm_prepare(pcm);
+			usleep(5000);
+		} else if (snd_writes++ == 0) {
+			logmsg("sound: the first %d frames played", PERIOD);
+		}
+	}
+	return NULL;
+}
 
 static void set_mixer(void)
 {
@@ -1643,8 +1676,8 @@ static void sound_open(void)
 	static const unsigned rates[] = {48000, 44100, 32000};
 	for (size_t i = 0; i < 3 && !pcm; i++) {
 		struct pcm_config cfg = {
-			.channels = 2, .rate = rates[i], .period_size = 512, .period_count = 4,
-			.format = PCM_FORMAT_S16_LE, .start_threshold = 1024,
+			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 4,
+			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD,
 		};
 		struct pcm *p = pcm_open(0, 0, PCM_OUT, &cfg);
 		if (p && pcm_is_ready(p)) {
@@ -1656,6 +1689,26 @@ static void sound_open(void)
 		}
 	}
 	logmsg(pcm ? "sound: playing at %u Hz" : "sound: no output (%u)", snd_rate);
+	{
+		FILE *c = fopen("/proc/asound/cards", "r");
+		char line[160];
+		while (c && fgets(line, sizeof line, c)) {
+			line[strcspn(line, "\n")] = 0;
+			logmsg("sound card: %s", line);
+		}
+		if (c)
+			fclose(c);
+	}
+	pthread_t t;
+	if (pcm) {
+		snd_running = true;
+		if (pthread_create(&t, NULL, snd_thread, NULL) != 0) {
+			snd_running = false;
+			logmsg("sound: no thread");
+		} else {
+			pthread_detach(t);
+		}
+	}
 }
 
 static void cb_audio_sample(int16_t l, int16_t r)
@@ -1675,29 +1728,26 @@ static size_t cb_audio_batch(const int16_t *data, size_t frames)
 	return frames;
 }
 
-/* The frame's sound out: one speaker, so both channels the same. The card's buffer filling up
- * keeps the game at its speed */
-static bool sound_flush(void)
+/* The frame's sound into the ring: one speaker, so one channel; louder than the core gives it
+ * (its square waves peak near a sixth of the range): x3 at volume=100, the peaks bent, not cut */
+static void sound_flush(void)
 {
 	for (size_t i = 0; i < abuf_n; i++) {
-		int32_t v = ((int32_t)abuf[2 * i] + abuf[2 * i + 1]) / 2 * set_volume / 100;
-		if (v > 32767) v = 32767;
-		if (v < -32768) v = -32768;
-		abuf[2 * i] = abuf[2 * i + 1] = (int16_t)v;
+		int32_t v = ((int32_t)abuf[2 * i] + abuf[2 * i + 1]) / 2 * 3 * set_volume / 100;
+		abuf[2 * i] = abuf[2 * i + 1] = soft_limit(v);
 	}
-	bool paced = false;
 	if (test_pcm) {
 		fwrite(abuf, 4, abuf_n, test_pcm);
-	} else if (pcm && abuf_n) {
-		if (pcm_writei(pcm, abuf, (unsigned)abuf_n) < 0) {
-			xruns++;
-			pcm_prepare(pcm);
-		} else {
-			paced = true;
+	} else if (snd_running && abuf_n) {
+		pthread_mutex_lock(&ring_lock);
+		for (size_t i = 0; i < abuf_n; i++) {
+			if (ring_w - ring_r >= RING)
+				ring_r++;                 /* full: the oldest goes */
+			ring[ring_w++ % RING] = abuf[2 * i];
 		}
+		pthread_mutex_unlock(&ring_lock);
 	}
 	abuf_n = 0;
-	return paced;
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -1753,6 +1803,19 @@ static inline uint32_t src_px(unsigned sx, unsigned sy)
 	return ((v & 0x7c00u) << 9) | ((v & 0x03e0u) << 6) | ((v & 0x1fu) << 3);
 }
 
+/* The game's last picture into the canvas (behind the menu: no reading back from the screen) */
+static void game_to_canvas(void)
+{
+	memset(canvas, 0, sizeof canvas);
+	if (!frame_data || !mapped_w)
+		return;
+	for (int y = 0; y < gh; y++) {
+		unsigned sy = map_y[y];
+		for (int x = 0; x < gw; x++)
+			canvas[(gy0 + y) * LAND_W + gx0 + x] = src_px(map_x[x], sy);
+	}
+}
+
 /* The game's picture straight onto the screen */
 static void draw_game(void)
 {
@@ -1775,6 +1838,7 @@ static bool get_var(struct retro_variable *v)
 {
 	static const struct { const char *key, *value; } vars[] = {
 		{"fceumm_zapper_mode", "mouse"},          /* the Zapper: a mouse */
+		{"fceumm_sndvolume", "10"},               /* the core's own sound at 100 % (70 % by default) */
 		{"fceumm_show_crosshair", "enabled"},
 		{"fceumm_turbo_enable", "Both"},          /* X / Y: A and B fired again and again */
 		{"fceumm_sndrate_hint", NULL},            /* filled in: the output's rate */
@@ -3274,7 +3338,7 @@ static void play(int idx)
 			if (quick_save) c = M_SAVE;
 			else if (quick_load) c = M_LOAD;
 			else {
-				fb_to_canvas();                   /* the game's picture behind the menu */
+				game_to_canvas();                 /* the game's picture behind the menu */
 				c = game_menu();
 			}
 			input_settle();
@@ -3294,8 +3358,6 @@ static void play(int idx)
 			present(0, 0, LAND_W, LAND_H);
 			if (msg)
 				note("%s", msg);
-			if (pcm)
-				pcm_prepare(pcm);
 			clock_gettime(CLOCK_MONOTONIC, &next);
 			if (done)
 				break;
@@ -3311,15 +3373,19 @@ static void play(int idx)
 			fill(0, 0, LAND_W, 46, 0);
 			present(0, 0, LAND_W, 46);
 		}
-		bool paced = sound_flush();
+		sound_flush();
 		frames++;
-		if (!paced) {                     /* no sound to keep time: the clock */
+		{                                 /* the game's time: the clock */
 			long step = (long)(1e9 / fps);
 			next.tv_nsec += step;
 			while (next.tv_nsec >= 1000000000L) {
 				next.tv_nsec -= 1000000000L;
 				next.tv_sec++;
 			}
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			if (now.tv_sec - next.tv_sec > 1)     /* far behind (slow frames): no racing to catch up */
+				next = now;
 			if (!test_mode || keys_scripted())
 				clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
 		}
@@ -3329,7 +3395,8 @@ static void play(int idx)
 			save_sram();
 		}
 		if (t - fps_t >= 10000) {
-			logmsg("%.1f frames/s, sound gaps so far: %u", (frames - fps_frames) * 1000.0 / (t - fps_t), xruns);
+			logmsg("%.1f frames/s, sound: %u periods played, %u gaps", (frames - fps_frames) * 1000.0 / (t - fps_t),
+			       snd_writes, xruns);
 			fps_t = t;
 			fps_frames = frames;
 		}
