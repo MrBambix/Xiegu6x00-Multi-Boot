@@ -132,7 +132,8 @@ Mysz to pistolet Zapper w grach, które go używają (np. Duck Hunt). Pady: pier
 drugi gracz 2, menu przyciskiem Home albo Select+Start razem. Działają pady HID (8BitDo w trybie
 D-input lub Switch, PS4 i Xbox przez Bluetooth, zwykłe pady USB); przewodowe pady Xbox 360 nie,
 bo jądro radia nie ma ich sterownika. Inny układ przycisków ustawisz w menu: **Przyciski pada**
-(zapisuje się w `NES/pads.txt`). Pad Bluetooth parujesz w samym emulatorze: **Paruj pad Bluetooth**.
+(zapisuje się w `NES/pads.txt`). Menu **Bluetooth** w emulatorze: parowanie padów, klawiatur i myszy
+(kod do wpisania pokazuje na ekranie), lista sparowanych (połącz, rozłącz, usuń), wł./wył. Bluetooth.
 
 Ustawienia: plik `nes.txt` na partycji `BOOT` (`volume=`, `rxvol=`, `aspect=2x` albo `4:3`,
 `bluetooth=`, `lang=`). Dziennik: `nes-log.txt`.

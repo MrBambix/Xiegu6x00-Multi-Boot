@@ -525,7 +525,8 @@ Klawiatura, mysz, pady (USB i Bluetooth)
   Działają pady HID: 8BitDo (tryb D-input lub Switch), PS4 i Xbox przez Bluetooth, zwykłe pady USB.
   Pady Xbox 360 na kablu nie działają (jądro radia nie ma ich sterownika).
   Inny układ przycisków? Menu emulatora > Przyciski pada: naciskasz po kolei, zapisuje się.
-  Pad Bluetooth parujesz w samym emulatorze: Menu > Paruj pad Bluetooth (pad w trybie parowania).
+  Bluetooth w menu emulatora: parowanie padów, klawiatur i myszy (kod pokazuje na ekranie),
+  lista sparowanych (połącz, rozłącz, usuń), włączanie i wyłączanie Bluetooth.
   Pady, klawiatury i myszy sparowane wcześniej w pierwszym systemie też się łączą.
 
 Ustawienia
@@ -587,7 +588,8 @@ Keyboard, mouse, pads (USB and Bluetooth)
   HID pads work: 8BitDo (D-input or Switch mode), PS4 and Xbox over Bluetooth, plain USB pads.
   Wired Xbox 360 pads do not (the radio's kernel has no driver for them).
   Another button layout? The emulator's menu > Pad buttons: press them in turn, it is saved.
-  Pair a Bluetooth pad in the emulator itself: Menu > Pair a Bluetooth pad (the pad in pairing mode).
+  Bluetooth in the emulator's menu: pairing pads, keyboards and mice (a code is shown on the
+  screen), the paired list (connect, disconnect, remove), Bluetooth on and off.
   Pads, keyboards and mice paired earlier in the first system connect too.
 
 Settings

@@ -1526,13 +1526,16 @@ static const char bt_script[] =
 	"[ -x /etc/init.d/S39btpairings ] && /etc/init.d/S39btpairings start >/dev/null 2>&1\n"
 	/* the pads paired in the emulator: kept on its own root filesystem */
 	"if [ -f /nes-bt/pairings.tar ]; then mkdir -p /var/lib/bluetooth; tar -C /var/lib/bluetooth -xf /nes-bt/pairings.tar; fi\n"
+	/* the devices forgotten in the emulator: gone again (the lending system's own copy keeps them) */
+	"if [ -f /nes-bt/forgotten.txt ]; then for mac in $(cat /nes-bt/forgotten.txt); do rm -rf /var/lib/bluetooth/*/$mac; done; fi\n"
 	"dbus-uuidgen --ensure 2>/dev/null\n"
 	"dbus-daemon --system\n"
 	"sleep 1\n"
 	"/usr/libexec/bluetooth/bluetoothd -n >/tmp/bluetoothd.log 2>&1 &\n"
 	"sleep 3\n"
-	"bluetoothctl power on\n"
+	"if [ -f /nes-bt/off ]; then bluetoothctl power off; else bluetoothctl power on; fi\n"
 	"touch /tmp/nes-bt-ready\n"
+	"[ -f /nes-bt/off ] && exit 0\n"
 	"paired() { { bluetoothctl devices Paired 2>/dev/null; bluetoothctl paired-devices 2>/dev/null; } |"
 	" awk '/^Device /{print $2}' | sort -u; }\n"
 	"paired\n"
@@ -1552,6 +1555,7 @@ static const char bt_scan_script[] =
 	"exec >/tmp/nes-scan.log 2>&1\n"
 	"export PATH=/usr/sbin:/usr/bin:/sbin:/bin\n"
 	"touch /tmp/nes-bt-busy\n"
+	"bluetoothctl power on\n"
 	"bluetoothctl --timeout 15 scan on\n"
 	"for mac in $(bluetoothctl devices | awk '/^Device /{print $2}'); do\n"
 	"  info=$(bluetoothctl info $mac)\n"
@@ -1562,19 +1566,22 @@ static const char bt_scan_script[] =
 	"done > /tmp/nes-scan.txt\n"
 	"rm -f /tmp/nes-bt-busy\n";
 
-/* Pairing one ($1): BlueZ's own agent with no keys to type (pads ask for none), trusted, connected,
- * and the pairings kept */
+/* Pairing one ($2): BlueZ's agent that can show a code (a keyboard asks for one: it is typed on
+ * it), every question answered yes, trusted, connected, and the pairings kept */
 static const char bt_pair_script[] =
 	"exec >/tmp/nes-pair.log 2>&1\n"
 	"export PATH=/usr/sbin:/usr/bin:/sbin:/bin\n"
-	"mac=$1\n"
+	"mac=$2\n"
 	"touch /tmp/nes-bt-busy\n"
 	"rm -f /tmp/nes-pair-result\n"
-	"{ echo 'agent NoInputNoOutput'; sleep 1; echo 'default-agent'; sleep 1; echo 'scan on'; sleep 4;\n"
-	"  echo \"pair $mac\"; sleep 12; echo \"trust $mac\"; sleep 1; echo \"connect $mac\"; sleep 6;\n"
+	"{ echo 'agent KeyboardDisplay'; sleep 1; echo 'default-agent'; sleep 1; echo 'scan on'; sleep 4;\n"
+	"  echo \"pair $mac\"; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do\n"
+	"    sleep 1; bluetoothctl info $mac 2>/dev/null | grep -q 'Paired: yes' && break; echo yes; done\n"
+	"  echo \"trust $mac\"; sleep 1; echo \"connect $mac\"; sleep 6;\n"
 	"  echo 'scan off'; sleep 1; echo quit; } | bluetoothctl\n"
 	"if bluetoothctl info $mac | grep -q 'Paired: yes'; then\n"
 	"  bluetoothctl trust $mac\n"
+	"  [ -f /nes-bt/forgotten.txt ] && grep -v \"$mac\" /nes-bt/forgotten.txt > /tmp/f.txt; [ -f /tmp/f.txt ] && cp /tmp/f.txt /nes-bt/forgotten.txt\n"
 	"  mkdir -p /nes-bt && tar -C /var/lib/bluetooth -cf /nes-bt/pairings.tar . && sync\n"
 	"  echo ok > /tmp/nes-pair-result\n"
 	"else\n"
@@ -1582,8 +1589,35 @@ static const char bt_pair_script[] =
 	"fi\n"
 	"rm -f /tmp/nes-bt-busy\n";
 
+/* The rest ($1 what, $2 the device): the paired list ("MAC|name|icon|connected"), connect,
+ * disconnect, forget (kept forgotten), Bluetooth on or off (kept) */
+static const char bt_ctl_script[] =
+	"exec >>/tmp/nes-ctl.log 2>&1\n"
+	"export PATH=/usr/sbin:/usr/bin:/sbin:/bin\n"
+	"op=$1; mac=$2\n"
+	"touch /tmp/nes-bt-busy\n"
+	"paired() { { bluetoothctl devices Paired 2>/dev/null; bluetoothctl paired-devices 2>/dev/null; } |"
+	" awk '/^Device /{print $2}' | sort -u; }\n"
+	"case $op in\n"
+	"connect) bluetoothctl --timeout 12 connect $mac ;;\n"
+	"disconnect) bluetoothctl --timeout 6 disconnect $mac ;;\n"
+	"remove) bluetoothctl remove $mac; mkdir -p /nes-bt; echo $mac >> /nes-bt/forgotten.txt;\n"
+	"  tar -C /var/lib/bluetooth -cf /nes-bt/pairings.tar . ; sync ;;\n"
+	"on) rm -f /nes-bt/off; bluetoothctl power on; sync ;;\n"
+	"off) mkdir -p /nes-bt; touch /nes-bt/off; bluetoothctl power off; sync ;;\n"
+	"esac\n"
+	"for m in $(paired); do\n"
+	"  info=$(bluetoothctl info $m)\n"
+	"  name=$(echo \"$info\" | sed -n 's/^[[:space:]]*Name: //p' | head -1 | tr '|' ' ')\n"
+	"  icon=$(echo \"$info\" | sed -n 's/^[[:space:]]*Icon: //p' | head -1)\n"
+	"  conn=$(echo \"$info\" | sed -n 's/^[[:space:]]*Connected: //p' | head -1)\n"
+	"  echo \"$m|$name|$icon|$conn\"\n"
+	"done > /tmp/nes-paired.txt\n"
+	"bluetoothctl show | sed -n 's/^[[:space:]]*Powered: //p' | head -1 > /tmp/nes-powered.txt\n"
+	"rm -f /tmp/nes-bt-busy\n";
+
 /* A shell script in the lending system's chroot; its pid */
-static pid_t run_chroot(const char *script, const char *name, const char *arg)
+static pid_t run_chroot(const char *script, const char *name, const char *arg, const char *arg2)
 {
 	char path[200];
 	snprintf(path, sizeof path, "/bt/tmp/%s", name);
@@ -1603,7 +1637,7 @@ static pid_t run_chroot(const char *script, const char *name, const char *arg)
 		char inner[200];
 		snprintf(inner, sizeof inner, "/tmp/%s", name);
 		if (chroot("/bt") == 0 && chdir("/") == 0)
-			execl("/bin/sh", "sh", inner, arg, (char *)NULL);
+			execl("/bin/sh", "sh", inner, arg ? arg : "-", arg2, (char *)NULL);
 		_exit(1);
 	}
 	return pid;
@@ -1777,7 +1811,7 @@ static void start_bluetooth(void)
 	mkdir("/nes/bt", 0700);
 	mkdir("/bt/nes-bt", 0700);
 	mount("/nes/bt", "/bt/nes-bt", NULL, MS_BIND, NULL);
-	if (run_chroot(bt_script, "nes-bt.sh", NULL) > 0) {
+	if (run_chroot(bt_script, "nes-bt.sh", NULL, NULL) > 0) {
 		bt_started = true;
 		logmsg("Bluetooth: starting the donor's BlueZ");
 	}
@@ -1786,42 +1820,106 @@ static void start_bluetooth(void)
 /* ------------------------------------------------------------------------------------------ */
 /* The emulator's screens                                                                     */
 /* ------------------------------------------------------------------------------------------ */
-/* Pairing a Bluetooth pad: a look around, a choice, the pairing */
-static void pair_pad(bool overlay)
+/* A box with a title and lines, the last one highlighted */
+static void panel(const char *title, const char *const *lines, int n, int big)
 {
-	(void)overlay;
-	if (!bt_started || access("/bt/tmp/nes-bt-ready", F_OK) != 0) {
-		const char *l[] = {T("Bluetooth nie dziala.", "Bluetooth is not running."),
-		                   T("Szczegoly: nes-log.txt na karcie.", "Details: nes-log.txt on the card."),
-		                   T("bluetooth=1 w nes.txt?", "bluetooth=1 in nes.txt?")};
-		message("Bluetooth", l, 3, 0);
-		return;
+	int x = 100, y = 100, w = 600, h = 110 + n * 26 + (big >= 0 ? 40 : 0);
+	fill(x, y, w, h, C_PANEL);
+	fill(x, y, w, 3, C_ACCENT);
+	text(x + 24, y + 22, 3, C_ACCENT, title, 23);
+	int yy = y + 70;
+	for (int i = 0; i < n; i++) {
+		if (i == big) {                   /* a code to type: large */
+			text(x + 24, yy, 4, C_WARN, lines[i], 17);
+			yy += 40;
+		} else {
+			text(x + 24, yy, 2, i == n - 1 ? C_WARN : C_TEXT, lines[i], 34);
+		}
+		yy += 26;
 	}
-	pid_t pid = run_chroot(bt_scan_script, "nes-scan.sh", NULL);
+	present(x, y, w, h);
+}
+
+static bool bt_ready(void)
+{
+	if (bt_started && access("/bt/tmp/nes-bt-ready", F_OK) == 0)
+		return true;
+	const char *l[] = {T("Bluetooth nie dziala.", "Bluetooth is not running."),
+	                   T("Szczegoly: nes-log.txt na karcie.", "Details: nes-log.txt on the card."),
+	                   T("bluetooth=1 w nes.txt?", "bluetooth=1 in nes.txt?")};
+	message("Bluetooth", l, 3, 0);
+	return false;
+}
+
+/* A control script run to its end, a word on the screen meanwhile */
+static void bt_ctl(const char *op, const char *mac, const char *what)
+{
+	pid_t pid = run_chroot(bt_ctl_script, "nes-ctl.sh", op, mac);
+	uint32_t start = now_ms();
+	while (pid > 0 && waitpid(pid, NULL, WNOHANG) == 0) {
+		char sec[48];
+		snprintf(sec, sizeof sec, "%u s", (now_ms() - start) / 1000);
+		const char *l[] = {what, sec};
+		panel("Bluetooth", l, 2, -1);
+		poll_input();
+		usleep(200000);
+	}
+}
+
+/* The code a keyboard asks to be typed, from bluetoothctl's words, or "" */
+static void pair_code(char *out, size_t n)
+{
+	out[0] = 0;
+	FILE *f = fopen("/bt/tmp/nes-pair.log", "r");
+	char line[400];
+	while (f && fgets(line, sizeof line, f)) {
+		char *k = strstr(line, "Passkey: ");
+		if (!k)
+			k = strstr(line, "PIN code: ");
+		if (!k)
+			continue;
+		k = strchr(k, ':') + 2;
+		int j = 0;
+		for (; *k && j < (int)n - 1; k++)
+			if (isdigit((unsigned char)*k))
+				out[j++] = *k;
+		out[j] = 0;
+	}
+	if (f)
+		fclose(f);
+}
+
+static const char *kind_of(const char *icon)
+{
+	if (!icon) return "";
+	if (strstr(icon, "gaming")) return T(" (pad)", " (pad)");
+	if (strstr(icon, "keyboard")) return T(" (klawiatura)", " (keyboard)");
+	if (strstr(icon, "mouse")) return T(" (mysz)", " (mouse)");
+	if (strstr(icon, "audio")) return T(" (audio)", " (audio)");
+	return "";
+}
+
+/* Looking around, choosing, pairing */
+static void bt_pair_new(void)
+{
+	pid_t pid = run_chroot(bt_scan_script, "nes-scan.sh", NULL, NULL);
 	uint32_t start = now_ms();
 	while (pid > 0 && waitpid(pid, NULL, WNOHANG) == 0) {
 		char sec[64];
 		snprintf(sec, sizeof sec, T("Szukam... %u s", "Searching... %u s"), (now_ms() - start) / 1000);
-		const char *l[] = {T("Wlacz na padzie tryb parowania", "Put the pad in pairing mode"),
-		                   T("(zwykle przytrzymaj przycisk", "(usually hold its pairing"),
+		const char *l[] = {T("Wlacz parowanie w urzadzeniu", "Put the device in pairing mode"),
+		                   T("(pad: zwykle przytrzymaj przycisk", "(a pad: usually hold its pairing"),
 		                   T("parowania kilka sekund).", "button a few seconds)."), "", sec};
-		int x = 100, y = 120, w = 600, h = 240;
-		fill(x, y, w, h, C_PANEL);
-		fill(x, y, w, 3, C_ACCENT);
-		text(x + 24, y + 22, 3, C_ACCENT, T("Parowanie pada", "Pairing a pad"), 23);
-		for (int i = 0; i < 5; i++)
-			text(x + 24, y + 70 + i * 26, 2, i == 4 ? C_WARN : C_TEXT, l[i], 34);
-		present(x, y, w, h);
+		panel(T("Szukam urzadzen", "Looking for devices"), l, 5, -1);
 		poll_input();
 		usleep(200000);
 	}
-	/* what was seen: input devices first */
 	char macs[40][18], labels[40][80];
 	const char *items[41];
 	int n = 0;
 	FILE *f = fopen("/bt/tmp/nes-scan.txt", "r");
 	char line[300];
-	for (int pass = 0; pass < 2; pass++) {
+	for (int pass = 0; pass < 2; pass++) {         /* pads, keyboards, mice first */
 		if (f)
 			rewind(f);
 		while (f && n < 40 && fgets(line, sizeof line, f)) {
@@ -1834,9 +1932,8 @@ static void pair_pad(bool overlay)
 			if (input != (pass == 0))
 				continue;
 			snprintf(macs[n], sizeof macs[n], "%s", mac);
-			snprintf(labels[n], sizeof labels[n], "%s%s%s", name && *name ? name : mac,
-			         input ? (strstr(icon, "gaming") ? T(" (pad)", " (pad)") : "") : "",
-			         paired && !strcmp(paired, "yes") ? T(" *sparowany", " *paired") : "");
+			snprintf(labels[n], sizeof labels[n], "%s%s%s", name && *name ? name : mac, kind_of(icon),
+			         paired && !strcmp(paired, "yes") ? T(" *sparowane", " *paired") : "");
 			items[n] = labels[n];
 			n++;
 		}
@@ -1844,29 +1941,29 @@ static void pair_pad(bool overlay)
 	if (f)
 		fclose(f);
 	if (!n) {
-		const char *l[] = {T("Nie znaleziono urzadzen.", "No device found."),
-		                   T("Wlacz parowanie na padzie", "Put the pad in pairing mode"),
+		const char *l[] = {T("Nic nie znaleziono.", "Nothing found."),
+		                   T("Wlacz parowanie w urzadzeniu", "Put the device in pairing mode"),
 		                   T("i sprobuj jeszcze raz.", "and try again.")};
 		message("Bluetooth", l, 3, 0);
 		return;
 	}
-	int c = menu(T("Wybierz pad", "Choose the pad"), items, n, 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
+	int c = menu(T("Wybierz urzadzenie", "Choose the device"), items, n, 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
 	if (c < 0)
 		return;
-	unlink("/bt/tmp/nes-pair-result");
-	pid = run_chroot(bt_pair_script, "nes-pair.sh", macs[c]);
+	pid = run_chroot(bt_pair_script, "nes-pair.sh", "pair", macs[c]);
 	start = now_ms();
 	while (pid > 0 && waitpid(pid, NULL, WNOHANG) == 0) {
-		char sec[64];
+		char sec[64], code[16];
 		snprintf(sec, sizeof sec, T("Paruje... %u s", "Pairing... %u s"), (now_ms() - start) / 1000);
-		const char *l[] = {labels[c], "", sec};
-		int x = 100, y = 120, w = 600, h = 190;
-		fill(x, y, w, h, C_PANEL);
-		fill(x, y, w, 3, C_ACCENT);
-		text(x + 24, y + 22, 3, C_ACCENT, T("Parowanie pada", "Pairing a pad"), 23);
-		for (int i = 0; i < 3; i++)
-			text(x + 24, y + 70 + i * 26, 2, i == 2 ? C_WARN : C_TEXT, l[i], 34);
-		present(x, y, w, h);
+		pair_code(code, sizeof code);
+		if (code[0]) {
+			const char *l[] = {labels[c], T("Wpisz na klawiaturze i Enter:", "Type it on the keyboard, then Enter:"),
+			                   code, sec};
+			panel(T("Parowanie", "Pairing"), l, 4, 2);
+		} else {
+			const char *l[] = {labels[c], "", sec};
+			panel(T("Parowanie", "Pairing"), l, 3, -1);
+		}
 		poll_input();
 		usleep(200000);
 	}
@@ -1879,11 +1976,96 @@ static void pair_pad(bool overlay)
 	}
 	log_file("pairing", "/bt/tmp/nes-pair.log", 6000);
 	bool ok = !strncmp(res, "ok", 2);
-	const char *ok_l[] = {labels[c], T("Sparowany: laczy sie sam", "Paired: it connects by itself"),
+	const char *ok_l[] = {labels[c], T("Sparowane: laczy sie samo", "Paired: it connects by itself"),
 	                      T("po wlaczeniu emulatora.", "when the emulator starts.")};
 	const char *no_l[] = {labels[c], T("Nie udalo sie sparowac.", "Pairing failed."),
 	                      T("Sprobuj jeszcze raz.", "Try again.")};
+	memset(canvas, 0, sizeof canvas);
+	present(0, 0, LAND_W, LAND_H);
 	message(ok ? T("Gotowe", "Done") : "Bluetooth", ok ? ok_l : no_l, 3, 0);
+}
+
+/* The paired devices: each one connected, disconnected, forgotten */
+static void bt_paired(void)
+{
+	int sel = 0;
+	for (;;) {
+		bt_ctl("list", "-", T("Czytam liste...", "Reading the list..."));
+		char macs[40][18], labels[40][90];
+		const char *items[41];
+		bool conn[40];
+		int n = 0;
+		FILE *f = fopen("/bt/tmp/nes-paired.txt", "r");
+		char line[300];
+		while (f && n < 40 && fgets(line, sizeof line, f)) {
+			line[strcspn(line, "\n")] = 0;
+			char *mac = strtok(line, "|"), *name = strtok(NULL, "|"), *icon = strtok(NULL, "|"),
+			     *c = strtok(NULL, "|");
+			if (!mac || strlen(mac) != 17)
+				continue;
+			snprintf(macs[n], sizeof macs[n], "%s", mac);
+			conn[n] = c && !strcmp(c, "yes");
+			snprintf(labels[n], sizeof labels[n], "%s %s%s", conn[n] ? "*" : "-", name && *name ? name : mac,
+			         kind_of(icon));
+			items[n] = labels[n];
+			n++;
+		}
+		if (f)
+			fclose(f);
+		if (!n) {
+			const char *l[] = {T("Brak sparowanych urzadzen.", "No paired devices.")};
+			message("Bluetooth", l, 1, 0);
+			return;
+		}
+		int c = menu(T("Sparowane (* polaczone)", "Paired (* connected)"), items, n, sel,
+		             set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
+		if (c < 0)
+			return;
+		sel = c;
+		const char *acts[] = {conn[c] ? T("Rozlacz", "Disconnect") : T("Polacz", "Connect"),
+		                      T("Usun (zapomnij)", "Remove (forget)"), T("Wroc", "Back")};
+		int a = menu(labels[c] + 2, acts, 3, 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
+		if (a == 0)
+			bt_ctl(conn[c] ? "disconnect" : "connect", macs[c],
+			       conn[c] ? T("Rozlaczam...", "Disconnecting...") : T("Lacze...", "Connecting..."));
+		else if (a == 1)
+			bt_ctl("remove", macs[c], T("Usuwam...", "Removing..."));
+	}
+}
+
+/* Bluetooth: pairing, the paired devices, on and off */
+static void bt_menu(void)
+{
+	if (!bt_ready())
+		return;
+	int sel = 0;
+	for (;;) {
+		bool on = access("/nes/bt/off", F_OK) != 0;
+		const char *items[] = {
+			T("Szukaj i paruj nowe", "Search and pair new"),
+			T("Sparowane urzadzenia", "Paired devices"),
+			on ? T("Bluetooth: wlaczony (wylacz)", "Bluetooth: on (switch off)")
+			   : T("Bluetooth: wylaczony (wlacz)", "Bluetooth: off (switch on)"),
+			T("Wroc", "Back"),
+		};
+		memset(canvas, 0, sizeof canvas);
+		present(0, 0, LAND_W, LAND_H);
+		int c = menu("Bluetooth", items, 4, sel, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
+		if (c < 0 || c == 3)
+			break;
+		sel = c;
+		if (c == 0) {
+			if (!on)
+				bt_ctl("on", "-", T("Wlaczam...", "Switching on..."));
+			bt_pair_new();
+		} else if (c == 1) {
+			bt_paired();
+		} else {
+			bt_ctl(on ? "off" : "on", "-", on ? T("Wylaczam...", "Switching off...") : T("Wlaczam...", "Switching on..."));
+		}
+	}
+	memset(canvas, 0, sizeof canvas);
+	present(0, 0, LAND_W, LAND_H);
 }
 
 /* A pad's buttons, one by one */
@@ -1988,7 +2170,7 @@ static int game_menu(void)
 	const char *items[] = {
 		T("Wroc do gry", "Back to the game"), T("Zapisz stan", "Save state"), T("Wczytaj stan", "Load state"),
 		T("Reset gry", "Reset the game"), T("Przyciski pada", "Pad buttons"),
-		T("Paruj pad Bluetooth", "Pair a Bluetooth pad"), T("Lista gier", "Game list"),
+		T("Bluetooth (parowanie)", "Bluetooth (pairing)"), T("Lista gier", "Game list"),
 		T("Restart do menu startowego", "Restart to the boot menu"), T("Wylacz radio", "Switch the radio off"),
 	};
 	int c = menu(cur_base, items, 9, 0, T("F2/A: wybierz  GEN: do gry", "F2/A: choose  GEN: back to the game"), true);
@@ -2071,7 +2253,7 @@ static void play(int idx)
 			case M_LOAD: msg = load_state(0) ? T("Stan wczytany", "State loaded") : T("Brak zapisu", "No saved state"); break;
 			case M_RESET: retro_reset(); break;
 			case M_PAD: learn_pad(); break;
-			case M_PAIR: pair_pad(true); break;
+			case M_PAIR: bt_menu(); break;
 			case M_LIST: done = true; break;
 			case M_REBOOT: leave(RB_AUTOBOOT); break;
 			case M_OFF: leave(RB_POWER_OFF); break;
@@ -2142,7 +2324,7 @@ static void game_list(void)
 		scan_games();
 		enum { X_PAIR, X_PAD, X_REBOOT, X_OFF, X_N };
 		const char *extra[X_N] = {
-			T("> Paruj pad Bluetooth", "> Pair a Bluetooth pad"), T("> Przyciski pada", "> Pad buttons"),
+			T("> Bluetooth (parowanie)", "> Bluetooth (pairing)"), T("> Przyciski pada", "> Pad buttons"),
 			T("> Restart do menu startowego", "> Restart to the boot menu"), T("> Wylacz radio", "> Switch the radio off"),
 		};
 		static const char *items[MAX_GAMES + X_N + 1];
@@ -2176,7 +2358,7 @@ static void game_list(void)
 			continue;
 		}
 		switch (c - base) {
-		case X_PAIR: pair_pad(false); break;
+		case X_PAIR: bt_menu(); break;
 		case X_PAD: learn_pad(); break;
 		case X_REBOOT: leave(RB_AUTOBOOT); break;
 		case X_OFF: leave(RB_POWER_OFF); break;
@@ -2321,9 +2503,16 @@ int main(int argc, char **argv)
 		game_names[0] = g;
 		n_games = 1;
 		play(0);
-		const char *outs[2] = {getenv("NES_TEST_OUT"), getenv("NES_TEST_MENU_OUT")};
-		for (int k = 0; k < 2; k++) {
-			if (k) {                      /* then the menu over it: its look is checked too */
+		const char *outs[3] = {getenv("NES_TEST_OUT"), getenv("NES_TEST_MENU_OUT"), getenv("NES_TEST_BT_OUT")};
+		for (int k = 0; k < 3; k++) {
+			if (k == 2) {                 /* the Bluetooth menu's look, Polish */
+				set_en = 0;
+				const char *items[] = {"Szukaj i paruj nowe", "Sparowane urzadzenia",
+				                       "Bluetooth: wlaczony (wylacz)", "Wroc"};
+				menu("Bluetooth", items, 4, 0, HINT_LIST_PL, false);
+				const char *l[] = {"Klawiatura BT (klawiatura)", "Wpisz na klawiaturze i Enter:", "482917", "Paruje... 4 s"};
+				panel("Parowanie", l, 4, 2);
+			} else if (k) {                      /* then the menu over it: its look is checked too */
 				set_en = 1;
 				snprintf(cur_base, sizeof cur_base, "Test game");
 				game_menu();

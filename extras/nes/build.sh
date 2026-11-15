@@ -70,7 +70,7 @@ PY
 if command -v gcc >/dev/null; then
     build gcc "$W/pc"
     gcc -o "$W/nes-pc" "$W"/pc/*.o $(find "$W/pc/fceumm/src" -name '*.o') -lm -lpthread
-    (cd "$W" && NES_TEST_FB=480x800 NES_TEST_FRAMES=120 NES_TEST_OUT=frame.raw NES_TEST_MENU_OUT=menu.raw NES_TEST_PCM=sound.raw \
+    (cd "$W" && NES_TEST_FB=480x800 NES_TEST_FRAMES=120 NES_TEST_OUT=frame.raw NES_TEST_MENU_OUT=menu.raw NES_TEST_BT_OUT=bt.raw NES_TEST_PCM=sound.raw \
         NES_TEST_ROM="$W/test.nes" timeout 120 ./nes-pc > pc-test.log 2>&1)
     test "$(stat -c %s "$W/frame.raw")" = 1536000
     python3 - "$W/frame.raw" "$W/sound.raw" <<'PY'
@@ -90,6 +90,7 @@ assert n > 48000 and loud > n // 4, "no tone came out"
 PY
     cp "$W/frame.raw" "$OUT/test-frame-480x800-bgrx.raw"
     cp "$W/menu.raw" "$OUT/test-menu-480x800-bgrx.raw"
+    cp "$W/bt.raw" "$OUT/test-bt-480x800-bgrx.raw"
 fi
 
 # The root filesystem
