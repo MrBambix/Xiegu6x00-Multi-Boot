@@ -1971,18 +1971,16 @@ static void *snd_thread(void *arg)
 			clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &due, NULL);
 			r = PERIOD;
 		}
-		if (r < 0) {
-			/* the card ran dry: counted, started again with a cushion of silence */
+		if (r < 0) {                              /* as on card 39 */
 			if (xruns++ < 5)
-				logmsg("sound: underrun: %s", pcm_get_error(pcm));
+				logmsg("sound: write: %s", pcm_get_error(pcm));
 			pcm_prepare(pcm);
-			static int16_t zero[PERIOD * 2];
-			if (pcm_writei(pcm, zero, PERIOD) < 0 || pcm_writei(pcm, out, PERIOD) < 0)
-				pcm_prepare(pcm);
-		} else if (snd_writes++ == 0) {
-			logmsg("sound: the first %d frames played", PERIOD);
+			usleep(5000);
+		} else {
+			if (snd_writes++ == 0)
+				logmsg("sound: the first %d frames played", PERIOD);
+			snd_frames += PERIOD;
 		}
-		snd_frames += PERIOD;
 	}
 	return NULL;
 }
@@ -2045,10 +2043,10 @@ static void sound_open(void)
 	static const unsigned rates[] = {48000, 44100, 32000};
 	for (size_t i = 0; i < 3 && !pcm; i++) {
 		struct pcm_config cfg = {
-			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 8,
-			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD * 2,
+			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 4,
+			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD,
 		};
-		struct pcm *p = pcm_open(0, 0, PCM_OUT | PCM_NORESTART, &cfg);
+		struct pcm *p = pcm_open(0, 0, PCM_OUT, &cfg);    /* as on card 39, where it was heard */
 		if (p && pcm_is_ready(p)) {
 			pcm = p;
 			snd_rate = rates[i];
