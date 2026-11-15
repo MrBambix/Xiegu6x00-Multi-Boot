@@ -2702,6 +2702,8 @@ static void start_bluetooth(void)
 struct btdev {
 	char mac[18], name[64], icon[32];
 	bool paired, trusted, connected, seen;
+	bool name_from_name;                 /* the device's own name, not an alias */
+	uint32_t asked;                      /* when its info was last asked for */
 };
 static struct btdev btd[MAX_BT];
 static int n_btd;
@@ -2756,12 +2758,27 @@ static void bt_send(const char *fmt, ...)
 		logmsg("bt: write: %s", strerror(errno));
 }
 
+/* BlueZ names a device it knows no name of by its address ("AA-BB-CC-DD-EE-FF"): not a name */
+static bool addr_like(const char *v, const char *mac)
+{
+	if (strlen(v) < 17)
+		return false;
+	for (int i = 0; i < 17; i++) {
+		char a = v[i], b = mac[i];
+		if (i % 3 == 2 ? (a != '-' && a != ':' && a != '_') : toupper((unsigned char)a) != toupper((unsigned char)b))
+			return false;
+	}
+	return v[17] == 0 || v[17] == ' ';
+}
+
 static void bt_set(struct btdev *d, const char *key, const char *val)
 {
 	bool yes = !strncmp(val, "yes", 3);
-	if (!strcmp(key, "Name"))
+	if (!strcmp(key, "Name") && *val && !addr_like(val, d->mac)) {
 		snprintf(d->name, sizeof d->name, "%s", val);
-	else if (!strcmp(key, "Alias") && !d->name[0])
+		d->name_from_name = true;
+	}
+	else if (!strcmp(key, "Alias") && *val && !addr_like(val, d->mac) && !d->name_from_name)
 		snprintf(d->name, sizeof d->name, "%s", val);
 	else if (!strcmp(key, "Icon"))
 		snprintf(d->icon, sizeof d->icon, "%s", val);
@@ -2841,7 +2858,7 @@ static void bt_line(char *line)
 			return;
 		if (tag == 'N') {
 			d->seen = true;
-			if (*rest && strncmp(rest, mac, 2))        /* a name, not the address again */
+			if (*rest && !addr_like(rest, mac) && !d->name[0])   /* a name, not the address again */
 				snprintf(d->name, sizeof d->name, "%s", rest);
 			bt_send("info %.17s", mac);                  /* what it is: a pad, a keyboard... */
 		} else if (tag == 'D') {
@@ -2878,7 +2895,7 @@ static void bt_line(char *line)
 		bt_in_ctrl = false;
 		if (*rest != '(') {                       /* "devices": the address and the name */
 			struct btdev *d = bt_dev(bt_cur, true);
-			if (d && *rest && !d->name[0])
+			if (d && *rest && !d->name[0] && !addr_like(rest, d->mac))
 				snprintf(d->name, sizeof d->name, "%s", rest);
 			bt_send("info %s", bt_cur);
 		} else {
@@ -3228,6 +3245,18 @@ static void bt_scan(void)
 		if (scanning && el >= 90) {
 			bt_send("scan off");
 			scanning = false;
+		}
+		{
+			uint32_t t = now_ms();
+			int asked = 0;
+			for (int i = 0; i < n_btd && asked < 4; i++) {
+				struct btdev *d = &btd[i];
+				if (d->seen && !d->paired && (!d->name[0] || !d->icon[0]) && t - d->asked > 3000) {
+					d->asked = t;
+					bt_send("info %s", d->mac);
+					asked++;
+				}
+			}
 		}
 		/* pads, keyboards, mice first; then the named; the nameless last */
 		int n = 0;
