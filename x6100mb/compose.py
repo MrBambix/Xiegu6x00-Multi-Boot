@@ -102,11 +102,26 @@ def extra_of(entry):
 NES_PICTURES = (".png", ".jpg", ".jpeg", ".bmp")
 
 
+def _nes_files(paths):
+    """The paths, a folder given standing for the games, archives and pictures in it (subfolders too)"""
+    out = []
+    for p in paths:
+        if os.path.isdir(p):
+            for root, dirs, files in os.walk(p):
+                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                out += [os.path.join(root, f) for f in sorted(files)
+                        if not f.startswith(".") and f.lower().endswith(NES_GAMES + NES_PICTURES + (".zip",))]
+        else:
+            out.append(p)
+    return out
+
+
 def nes_pictures(paths):
     """The games' pictures, shown beside the list on the radio: a file of the game's name with
     .png/.jpg/.bmp beside it (or in its .zip). For NES/IMG: [(stem + extension, bytes or path)]"""
     import zipfile
     out, seen = [], set()
+    paths = _nes_files(paths)
 
     def add(stem, ext, data):
         if stem.lower() not in seen:
@@ -142,9 +157,11 @@ def nes_pictures(paths):
 
 
 def nes_games(paths):
-    """The NES games to put on the card, from files and .zip archives: [(file name, bytes or path)]"""
+    """The NES games to put on the card, from files, .zip archives and folders of them:
+    [(file name, bytes or path)]"""
     import zipfile
     out, seen = [], set()
+    paths = _nes_files(paths)
     for p in paths:
         if p.lower().endswith(".zip"):
             try:

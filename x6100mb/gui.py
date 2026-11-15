@@ -834,6 +834,7 @@ class App:
         ColorButton(col, t("+ Emulator NES"), "secondary", self.add_nes, image=self._nes_img,
                     pady=5).pack(fill="x", pady=(6, 0))
         ColorButton(col, t("Gry NES…"), "secondary", self.nes_games).pack(fill="x", pady=(6, 0))
+        ColorButton(col, t("Folder z grami NES…"), "secondary", self.nes_folder).pack(fill="x", pady=(6, 0))
         ColorButton(col, t("Przeczytaj najpierw"), "danger", self.doom_readme).pack(fill="x", pady=(6, 0))
 
     def add_nes(self):
@@ -848,21 +849,20 @@ class App:
             return
         self.entries.append({"kind": "nes", "name": NES_NAME, "games": []})
         self._redraw(len(self.entries) - 1)
+        self.nes_games()                              # the games straight away: the files chosen
 
-    def nes_games(self):
-        """The user's own NES games for the card (files or .zip archives of them); none come with the app"""
+    def nes_folder(self):
+        """A folder of the user's NES games (subfolders, .zip archives and pictures too) for the card"""
         nes = next((e for e in self.entries if e["kind"] == "nes"), None)
         if nes is None:
             self.add_nes()
-            nes = next((e for e in self.entries if e["kind"] == "nes"), None)
-            if nes is None:
-                return
-        paths = filedialog.askopenfilenames(
-            title=t("Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi; obrazki gier .png, .jpg)"),
-            filetypes=[(t("Gry NES"), "*.nes *.NES *.fds *.FDS *.unf *.UNF *.unif *.nsf *.NSF *.zip *.ZIP *.png *.PNG *.jpg *.JPG *.jpeg *.bmp *.BMP"),
-                       (t("Wszystkie pliki"), "*")])
-        if not paths:
             return
+        folder = filedialog.askdirectory(title=t("Folder z grami NES (anuluj: bez gier, dodasz je później)"),
+                                         mustexist=True)
+        if folder:
+            self._nes_add(nes, [folder])
+
+    def _nes_add(self, nes, paths):
         from .compose import ComposeError, nes_games, nes_pictures
         try:
             found = nes_games(list(paths)) or nes_pictures(list(paths))
@@ -872,13 +872,26 @@ class App:
         if not found:
             messagebox.showwarning(APP, t("W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf)."))
             return
-        have = {os.path.basename(p).lower() for p in nes["games"]}
-        nes["games"] = list(nes["games"]) + [p for p in paths if os.path.basename(p).lower() not in have]
+        have = {os.path.normcase(os.path.abspath(p)) for p in nes["games"]}
+        nes["games"] = list(nes["games"]) + [p for p in paths if os.path.normcase(os.path.abspath(p)) not in have]
         self.selected = self.entries.index(nes)
         self._redraw(self.selected)
         messagebox.showinfo(APP, t("Gry NES do wgrania na kartę: {n}. Trafią do folderu NES na partycji BOOT; "
                                    "później możesz dokładać kolejne prosto z komputera.",
                                    n=len(nes_games(nes["games"]))))
+
+    def nes_games(self):
+        """The user's own NES games for the card (files or .zip archives of them); none come with the app"""
+        nes = next((e for e in self.entries if e["kind"] == "nes"), None)
+        if nes is None:
+            self.add_nes()                            # it asks for the games itself
+            return
+        paths = filedialog.askopenfilenames(
+            title=t("Gry NES: zaznacz pliki (Ctrl+A: wszystkie z folderu; anuluj: bez gier, dodasz je później)"),
+            filetypes=[(t("Gry NES"), "*.nes *.NES *.fds *.FDS *.unf *.UNF *.unif *.nsf *.NSF *.zip *.ZIP *.png *.PNG *.jpg *.JPG *.jpeg *.bmp *.BMP"),
+                       (t("Wszystkie pliki"), "*")])
+        if paths:
+            self._nes_add(nes, list(paths))
 
     def add_doom(self):
         if any(e["kind"] == "doom" for e in self.entries):

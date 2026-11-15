@@ -443,9 +443,11 @@ EN = {
     "Emulator NES uruchamia się z jądrem systemu z obrazu (np. OpenX6X00). Dodaj najpierw taki system, potem emulator.":
         "The NES emulator starts with the kernel of a system from an image (e.g. OpenX6X00). Add such a system "
         "first, then the emulator.",
-    "Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi; obrazki gier .png, .jpg)":
-        "Your NES games (.nes, .fds, .unf, .nsf or a .zip of them; game pictures .png, .jpg)",
+    "Gry NES: zaznacz pliki (Ctrl+A: wszystkie z folderu; anuluj: bez gier, dodasz je później)":
+        "NES games: select the files (Ctrl+A: the whole folder's; cancel: no games, add them later)",
     "Gry NES": "NES games",
+    "Folder z grami NES…": "NES games folder…",
+    "Folder z grami NES (anuluj: bez gier, dodasz je później)": "A folder of NES games (cancel: no games, add them later)",
     "Wszystkie pliki": "All files",
     "W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf).":
         "The chosen files hold no NES games (.nes, .fds, .unf, .nsf).",

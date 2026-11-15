@@ -67,7 +67,7 @@ def cli(argv):
     b.add_argument("--nes", action="store_true", help="the NES emulator (with the first system's kernel)")
     b.add_argument("--nes-rootfs", help="its root filesystem (.ext4.xz; default: the one in the app)")
     b.add_argument("--nes-game", action="append", default=[], metavar="FILE",
-                   help="a NES game of your own (.nes/.fds/.unf/.nsf or a .zip of them) for the card; repeatable")
+                   help="a NES game of your own (.nes/.fds/.unf/.nsf, a .zip of them, or a folder of them) for the card; repeatable")
     b.add_argument("--default", type=int, default=1, help="default entry, 1 = F1")
     b.add_argument("--timeout", type=int, default=5, help="seconds before the default starts (0-15)")
     b.add_argument("--wait", action="store_true", help="no default: the menu waits for a key")
