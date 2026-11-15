@@ -111,7 +111,7 @@ static uint32_t now_ms(void)
 /* ------------------------------------------------------------------------------------------ */
 /* Settings: /boot/nes.txt                                                                    */
 /* ------------------------------------------------------------------------------------------ */
-static int set_volume = 100, set_rxvol = 20, set_rxmute = 0, set_headphone = 63, set_record = 1;
+static int set_volume = 100, set_rxvol = 20, set_rxmute = 0, set_headphone = 47, set_record = 1;
 static int set_bluetooth = 1, set_aspect = 0, set_en = 0, set_mouse = 100;
 
 /* The user's words, in Polish or English (lang=en in nes.txt; the app writes it) */
@@ -262,11 +262,11 @@ static const struct sound_opt sound_opts[SO_N] = {
 	{"noise", "NR / NB / DNF", "NR / NB / DNF", 2, {"-", "OFF"}, {-1, 0}},
 	{"squelch", "Squelch, tryb głośnika", "Squelch, speaker mode", 3, {"-", "0 / 0", "0 / 1"}, {-1, 0, 1}},
 	{"rfgain", "RF gain", "RF gain", 5, {"-", "0", "30", "64", "100"}, {-1, 0, 30, 64, 100}},
-	{"headphone", "Wyjście procesora (63: jak OpenX6X00)", "The SoC's output (63: as OpenX6X00)", 3, {"47", "55", "63"}, {47, 55, 63}},
+	{"headphone", "Wyjście procesora", "The SoC's output", 3, {"47", "55", "63"}, {47, 55, 63}},
 	{"volume", "Głośność gry", "Game volume", 0, {""}, {0}},           /* raw values: set_volume */
 	{"af", "Głośnik radia (AF)", "Radio speaker (AF)", 0, {""}, {0}},   /* set_rxvol */
 };
-static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 2, 0, 0};   /* the SoC's output 63 */
+static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 0, 0, 0};   /* the SoC's output 47, as Doom's */
 static void set_mixer(void);
 
 static void sound_apply(void)
@@ -1896,7 +1896,7 @@ static void *snd_thread(void *arg)
 	snd_since_us = now_us();
 	while (snd_running) {
 		unsigned have = 0;
-		for (int k = 0; k < 40; k++) {           /* up to 40 ms for the game's next sound */
+		for (int k = 0; k < 60; k++) {           /* up to 60 ms for the game's next sound */
 			pthread_mutex_lock(&ring_lock);
 			have = ring_w - ring_r;
 			pthread_mutex_unlock(&ring_lock);
@@ -1907,7 +1907,7 @@ static void *snd_thread(void *arg)
 		pthread_mutex_lock(&ring_lock);
 		have = ring_w - ring_r;
 		if (have < PERIOD)
-			gaps++;                               /* none for 40 ms (a menu): fading to silence */
+			gaps++;                               /* none for 60 ms: what there is, then fading */
 		for (unsigned i = 0; i < PERIOD; i++) {
 			int16_t v;
 			if (i < have) {
@@ -1921,18 +1921,17 @@ static void *snd_thread(void *arg)
 		}
 		ring_r += have < PERIOD ? have : PERIOD;
 		pthread_mutex_unlock(&ring_lock);
-		if (pcm_writei(pcm, out, PERIOD) < 0) {
-			/* the card ran dry: counted, started again with a cushion of silence */
+		int r = pcm_writei(pcm, out, PERIOD);
+		if (r < 0) {
 			if (xruns++ < 5)
-				logmsg("sound: underrun: %s", pcm_get_error(pcm));
+				logmsg("sound: write: %s", pcm_get_error(pcm));
 			pcm_prepare(pcm);
-			static int16_t zero[PERIOD * 2];
-			if (pcm_writei(pcm, zero, PERIOD) < 0 || pcm_writei(pcm, out, PERIOD) < 0)
-				pcm_prepare(pcm);
-		} else if (snd_writes++ == 0) {
-			logmsg("sound: the first %d frames played", PERIOD);
+			usleep(5000);
+		} else {
+			if (snd_writes++ == 0)
+				logmsg("sound: the first %d frames played", PERIOD);
+			snd_frames += PERIOD;
 		}
-		snd_frames += PERIOD;
 	}
 	return NULL;
 }
@@ -1989,10 +1988,10 @@ static void sound_open(void)
 	static const unsigned rates[] = {48000, 44100, 32000};
 	for (size_t i = 0; i < 3 && !pcm; i++) {
 		struct pcm_config cfg = {
-			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 8,
-			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD * 2,
+			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 4,
+			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD,
 		};
-		struct pcm *p = pcm_open(0, 0, PCM_OUT | PCM_NORESTART, &cfg);
+		struct pcm *p = pcm_open(0, 0, PCM_OUT, &cfg);
 		if (p && pcm_is_ready(p)) {
 			pcm = p;
 			snd_rate = rates[i];
@@ -2041,42 +2040,24 @@ static size_t cb_audio_batch(const int16_t *data, size_t frames)
 	return frames;
 }
 
-/* The frame's sound into the ring: one speaker, so one channel; x2 at volume=100 (the core's
- * square waves peak near a third of the range: room left), the peaks bent, not cut. The loudness
- * comes from the codec's output at its top (63), as OpenX6X00 sets it */
+/* The frame's sound into the ring: one speaker, so one channel; x3 at volume=100 (as on card 32,
+ * where it was heard), the peaks bent, not cut */
 static void sound_flush(void)
 {
 	for (size_t i = 0; i < abuf_n; i++) {
-		int32_t v = ((int32_t)abuf[2 * i] + abuf[2 * i + 1]) / 2 * 2 * set_volume / 100;
+		int32_t v = ((int32_t)abuf[2 * i] + abuf[2 * i + 1]) / 2 * 3 * set_volume / 100;
 		abuf[2 * i] = abuf[2 * i + 1] = soft_limit(v);
 	}
 	if (test_pcm) {
 		fwrite(abuf, 4, abuf_n, test_pcm);
 	} else if (snd_running && abuf_n) {
-		/* the game keeps the clock's time, the card its own: the frame's sound made a hair longer
-		 * when the ring runs low, shorter when it fills (at most 0.5 %, not heard), so it neither
-		 * runs dry nor grows */
-		static int16_t prev;
-		static double pos;                    /* where in this frame's sound the next one is taken */
-		unsigned level = ring_level();
-		const double target = PERIOD * 3;
-		double ratio = 1.0 + 0.005 * (target - (double)level) / target;
-		if (ratio < 0.995) ratio = 0.995;
-		if (ratio > 1.005) ratio = 1.005;
-		double step = 1.0 / ratio;
 		pthread_mutex_lock(&ring_lock);
-		for (; pos < (double)abuf_n; pos += step) {
-			size_t i = (size_t)pos;
-			double f = pos - (double)i;
-			int16_t a = i ? abuf[2 * (i - 1)] : prev, c = abuf[2 * i];
+		for (size_t i = 0; i < abuf_n; i++) {
 			if (ring_w - ring_r >= RING)
-				ring_r++;
-			ring[ring_w++ % RING] = (int16_t)(a + (c - a) * f);
+				ring_r++;                 /* full: the oldest goes */
+			ring[ring_w++ % RING] = abuf[2 * i];
 		}
 		pthread_mutex_unlock(&ring_lock);
-		pos -= (double)abuf_n;
-		prev = abuf[2 * (abuf_n - 1)];
-		drc_ratio = ratio;
 	}
 	abuf_n = 0;
 }
@@ -3608,7 +3589,7 @@ static int16_t tune_sample(uint64_t n)
 	}
 	if (in > step - snd_rate / 100)                            /* a gap between the notes */
 		v /= 4;
-	return soft_limit(v * 2 * set_volume / 100);
+	return soft_limit(v * 3 * set_volume / 100);
 }
 
 static void tune_tick(void)
@@ -3872,7 +3853,7 @@ static void play(int idx)
 		struct timespec nowts;
 		clock_gettime(CLOCK_MONOTONIC, &nowts);
 		long late_us = (nowts.tv_sec - next.tv_sec) * 1000000L + (nowts.tv_nsec - next.tv_nsec) / 1000;
-		if (late_us > 8000 && skipped < 3) {
+		if (!snd_running && late_us > 8000 && skipped < 3) {
 			skipped++;                        /* behind: this picture skipped, the next one shown */
 			skips++;
 		} else {
@@ -3892,7 +3873,11 @@ static void play(int idx)
 		}
 		sound_flush();
 		frames++;
-		{                                 /* the game's time: the clock */
+		if (snd_running) {                /* the game's time: the card's. On while the ring is low */
+			for (int k = 0; k < 100 && ring_level() > PERIOD * 3; k++)
+				usleep(1000);
+			clock_gettime(CLOCK_MONOTONIC, &next);
+		} else {                          /* no sound: the clock */
 			long step = (long)(1e9 / fps);
 			next.tv_nsec += step;
 			while (next.tv_nsec >= 1000000000L) {
