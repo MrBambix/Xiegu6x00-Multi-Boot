@@ -1958,12 +1958,12 @@ static void *snd_thread(void *arg)
 		if (pcm) {
 			r = pcm_writei(pcm, out, PERIOD);
 		} else {                                  /* the PC test's pretend card: 48 kHz of time */
-			static struct timespec due;           /* 0.4 % fast, as the radio's card */
+			static struct timespec due;           /* 1 % fast, as the radio's card */
 			struct timespec nw;
 			clock_gettime(CLOCK_MONOTONIC, &nw);
 			if ((nw.tv_sec - due.tv_sec) * 1000000000L + (nw.tv_nsec - due.tv_nsec) > 20000000L)
 				due = nw;                         /* a card never catches up on time it waited */
-			due.tv_nsec += (long)(PERIOD * 1e9 / 48192.0);
+			due.tv_nsec += (long)(PERIOD * 1e9 / 48486.0);
 			while (due.tv_nsec >= 1000000000L) {
 				due.tv_nsec -= 1000000000L;
 				due.tv_sec++;
@@ -2108,21 +2108,21 @@ static void sound_flush(void)
 	} else if (snd_running && abuf_n) {
 		game_frames += abuf_n;
 		/* the game keeps the clock's time, the card its own: the frame's sound made a hair longer
-		 * when the ring runs low, shorter when it fills (at most 1 %), so it neither runs dry nor
-		 * grows. The slow part learns the card's own pace (on the radio about 0.4 % fast), so the
-		 * ring stays near its mark rather than near empty */
+		 * when the ring runs low, shorter when it fills (at most 3 %), so it neither runs dry nor
+		 * grows. The slow part learns the card's own pace (on the radio 1 % fast: 48486 Hz taken
+		 * for 47998 made), so the ring stays near its mark rather than near empty */
 		static int16_t prev;
 		static double pos;                    /* where in this frame's sound the next one is taken */
 		static double drift;
 		unsigned level = ring_level();
 		const double target = PERIOD * 3;
 		double err = (target - (double)level) / target;
-		drift += 0.00002 * err;
-		if (drift < -0.008) drift = -0.008;
-		if (drift > 0.008) drift = 0.008;
-		double ratio = 1.0 + drift + 0.004 * err;
-		if (ratio < 0.99) ratio = 0.99;
-		if (ratio > 1.01) ratio = 1.01;
+		drift += 0.00005 * err;
+		if (drift < -0.025) drift = -0.025;
+		if (drift > 0.025) drift = 0.025;
+		double ratio = 1.0 + drift + 0.005 * err;
+		if (ratio < 0.97) ratio = 0.97;
+		if (ratio > 1.03) ratio = 1.03;
 		double step = 1.0 / ratio;
 		pthread_mutex_lock(&ring_lock);
 		for (; pos < (double)abuf_n; pos += step) {
