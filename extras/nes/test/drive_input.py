@@ -49,9 +49,9 @@ log("game: Select+Start = menu; B = back to the game")
 ev("pad", EV_KEY, BTN["SELECT"], 1); ev("pad", EV_KEY, BTN["START"], 1); time.sleep(0.3)
 ev("pad", EV_KEY, BTN["SELECT"], 0); ev("pad", EV_KEY, BTN["START"], 0); time.sleep(1.0)
 tap("pad", EV_KEY, BTN["EAST"]); time.sleep(1.0)                      # BTN_B: B, back
-log("game: Esc = menu, down x6 to Pad buttons, A")
+log("game: Esc = menu, down x7 to Pad buttons, A")
 tap("kbd", EV_KEY, KEY["ESC"]); time.sleep(0.8)
-for _ in range(6):
+for _ in range(7):
     axis(ABS["HAT0Y"], 1, 0, 0.1)
 tap("pad", EV_KEY, BTN["SOUTH"]); time.sleep(1.0)
 log("learning: trigger noise first, then up down left right A B select start turboA turboB")

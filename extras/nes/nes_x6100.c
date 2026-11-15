@@ -110,7 +110,7 @@ static uint32_t now_ms(void)
 /* ------------------------------------------------------------------------------------------ */
 /* Settings: /boot/nes.txt                                                                    */
 /* ------------------------------------------------------------------------------------------ */
-static int set_volume = 100, set_rxvol = 20, set_rxmute = 0, set_headphone = 47, set_record = 1;
+static int set_volume = 150, set_rxvol = 20, set_rxmute = 0, set_headphone = 47, set_record = 1;
 static int set_bluetooth = 1, set_aspect = 0, set_en = 0, set_mouse = 100;
 
 /* The user's words, in Polish or English (lang=en in nes.txt; the app writes it) */
@@ -262,10 +262,10 @@ static const struct sound_opt sound_opts[SO_N] = {
 	{"squelch", "Squelch, tryb głośnika", "Squelch, speaker mode", 3, {"-", "0 / 0", "0 / 1"}, {-1, 0, 1}},
 	{"rfgain", "RF gain", "RF gain", 5, {"-", "0", "30", "64", "100"}, {-1, 0, 30, 64, 100}},
 	{"headphone", "Wyjście procesora", "The SoC's output", 3, {"47", "55", "63"}, {47, 55, 63}},
-	{"volume", "Głośność gry", "Game volume", 4, {"50 %", "75 %", "100 %", "150 %"}, {50, 75, 100, 150}},
-	{"af", "Głośnik radia (AF)", "Radio speaker (AF)", 4, {"10", "20", "30", "45"}, {10, 20, 30, 45}},
+	{"volume", "Głośność gry", "Game volume", 0, {""}, {0}},           /* raw values: set_volume */
+	{"af", "Głośnik radia (AF)", "Radio speaker (AF)", 0, {""}, {0}},   /* set_rxvol */
 };
-static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 0, 2, 1};
+static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 static void set_mixer(void);
 
 static void sound_apply(void)
@@ -273,8 +273,6 @@ static void sound_apply(void)
 	int fd = open("/dev/i2c-0", O_RDWR);
 	const int *v = sound_sel;
 	set_headphone = sound_opts[SO_HP].vals[v[SO_HP]];
-	set_volume = sound_opts[SO_VOL].vals[v[SO_VOL]];
-	set_rxvol = sound_opts[SO_AF].vals[v[SO_AF]];
 	if (fd >= 0) {
 		bool ok = base_write(fd, 14, (uint32_t)set_rxvol);
 		if (v[SO_MODE]) ok &= base_write(fd, 4, (uint32_t)sound_opts[SO_MODE].vals[v[SO_MODE]]);
@@ -302,21 +300,29 @@ static void sound_load(void)
 	char path[320], line[256];
 	snprintf(path, sizeof path, "%s/sound.txt", roms_dir);
 	FILE *f = fopen(path, "r");
-	while (f && fgets(line, sizeof line, f))
+	bool raw = false;                        /* format=2: volume and af as values (older files: places) */
+	while (f && fgets(line, sizeof line, f)) {
+		if (!strncmp(line, "format=2", 8))
+			raw = true;
 		for (int i = 0; i < SO_N; i++) {
 			size_t k = strlen(sound_opts[i].key);
 			if (!strncmp(line, sound_opts[i].key, k) && line[k] == '=') {
 				int v = atoi(line + k + 1);
-				if (v >= 0 && v < sound_opts[i].n)
+				if (i == SO_VOL || i == SO_AF) {
+					if (raw && i == SO_VOL && v >= 0 && v <= 300)
+						set_volume = v;
+					else if (raw && i == SO_AF && v >= 0 && v <= 55)
+						set_rxvol = v;
+				} else if (v >= 0 && v < sound_opts[i].n) {
 					sound_sel[i] = v;
+				}
 			}
+		}
 		}
 	if (f)
 		fclose(f);
 	else {                                   /* the settings of nes.txt as they were */
 		for (int k = 0; k < sound_opts[SO_HP].n; k++) if (sound_opts[SO_HP].vals[k] == set_headphone) sound_sel[SO_HP] = k;
-		for (int k = 0; k < sound_opts[SO_AF].n; k++) if (sound_opts[SO_AF].vals[k] == set_rxvol) sound_sel[SO_AF] = k;
-		for (int k = 0; k < sound_opts[SO_VOL].n; k++) if (sound_opts[SO_VOL].vals[k] == set_volume) sound_sel[SO_VOL] = k;
 	}
 }
 
@@ -329,9 +335,10 @@ static bool sound_save(void)
 	FILE *f = fopen(path, "w");
 	if (!f)
 		return false;
-	fprintf(f, "# The game's sound on the radio (the emulator's Sound menu): each value is the place in its list\n");
+	fprintf(f, "# The game's sound on the radio (the emulator's Sound menu): the place in each list;\n"
+	           "# volume in %% (0..300), af the radio speaker's level (0..55)\nformat=2\n");
 	for (int i = 0; i < SO_N; i++)
-		fprintf(f, "%s=%d\n", sound_opts[i].key, sound_sel[i]);
+		fprintf(f, "%s=%d\n", sound_opts[i].key, i == SO_VOL ? set_volume : i == SO_AF ? set_rxvol : sound_sel[i]);
 	fclose(f);
 	flush_disks();
 	return true;
@@ -1316,12 +1323,20 @@ static void open_inputs(void)
 }
 
 /* A knob turned: its direction held for a while per detent (in the game), a step (in the menus) */
+static int vol_steps, af_steps;              /* knob turns for the game to take as volume */
+
 static void knob(int axis, int value)
 {
-	if (axis == 0)
+	if (axis == 1) {                          /* VOL: the radio's speaker, always (not the menus') */
+		af_steps += value;
+		return;
+	}
+	if (axis == 0)                            /* VFO, MFK: the menus */
 		nav_push(value > 0 ? N_DOWN : N_UP);
 	else
 		nav_push(value > 0 ? N_UP : N_DOWN);
+	if (axis == 2)                            /* MFK: nothing more in the game */
+		return;
 	uint32_t bit = axis == 0 ? (value > 0 ? BIT(J_RIGHT) : BIT(J_LEFT))
 	                         : (value > 0 ? BIT(J_UP) : BIT(J_DOWN));
 	uint32_t t = now_ms();
@@ -1365,6 +1380,23 @@ static void poll_input(void)
 	bt_poll();
 	if (test_mode)
 		test_keys();
+	static uint32_t af_changed;
+	if (af_steps) {                           /* the VOL knob: the radio's speaker, at once */
+		set_rxvol += af_steps;
+		set_rxvol = set_rxvol < 0 ? 0 : set_rxvol > 55 ? 55 : set_rxvol;
+		af_steps = 0;
+		int fd = open("/dev/i2c-0", O_RDWR);
+		if (fd >= 0) {
+			base_write(fd, 14, (uint32_t)set_rxvol);
+			close(fd);
+		}
+		note(T("Głośnik radia: %d z 55", "Radio speaker: %d of 55"), set_rxvol);
+		af_changed = t ? t : 1;
+	}
+	if (af_changed && t - af_changed > 3000) {    /* kept once the turning stopped */
+		af_changed = 0;
+		sound_save();
+	}
 	while (n_devs && poll(pfd, (nfds_t)n_devs, 0) > 0) {
 		bool any = false;
 		for (int i = 0; i < n_devs; i++) {
@@ -1492,6 +1524,7 @@ static void poll_input(void)
 /* Everything let go: a menu's last key does not go on into the game */
 static void input_settle(void)
 {
+	vol_steps = 0;
 	nav_r = nav_w;
 	want_menu = false;
 	quick_save = quick_load = false;
@@ -1824,6 +1857,7 @@ static FILE *test_pcm;
 static int16_t abuf[48000 / 30 * 2 * 4];
 static size_t abuf_n;                 /* frames */
 static unsigned xruns, snd_writes, gaps;
+static double drc_ratio = 1.0;               /* the last stretch of the sound (logged) */
 
 /* The sound goes to the card from a thread of its own, as Doom's (extras/doom/x6100_sound.c):
  * 512 frames at a time, the card started at once. The game keeps its time by the clock and never
@@ -1861,7 +1895,7 @@ static void *snd_thread(void *arg)
 	snd_since_us = now_us();
 	while (snd_running) {
 		unsigned have = 0;
-		for (int k = 0; k < 60; k++) {           /* up to 60 ms for the game's next sound */
+		for (int k = 0; k < 40; k++) {           /* up to 40 ms for the game's next sound */
 			pthread_mutex_lock(&ring_lock);
 			have = ring_w - ring_r;
 			pthread_mutex_unlock(&ring_lock);
@@ -1872,7 +1906,7 @@ static void *snd_thread(void *arg)
 		pthread_mutex_lock(&ring_lock);
 		have = ring_w - ring_r;
 		if (have < PERIOD)
-			gaps++;                               /* none for 60 ms: what there is, then fading */
+			gaps++;                               /* none for 40 ms (a menu): fading to silence */
 		for (unsigned i = 0; i < PERIOD; i++) {
 			int16_t v;
 			if (i < have) {
@@ -1886,17 +1920,18 @@ static void *snd_thread(void *arg)
 		}
 		ring_r += have < PERIOD ? have : PERIOD;
 		pthread_mutex_unlock(&ring_lock);
-		int r = pcm_writei(pcm, out, PERIOD);
-		if (r < 0) {
+		if (pcm_writei(pcm, out, PERIOD) < 0) {
+			/* the card ran dry: counted, started again with a cushion of silence */
 			if (xruns++ < 5)
-				logmsg("sound: write: %s", pcm_get_error(pcm));
+				logmsg("sound: underrun: %s", pcm_get_error(pcm));
 			pcm_prepare(pcm);
-			usleep(5000);
-		} else {
-			if (snd_writes++ == 0)
-				logmsg("sound: the first %d frames played", PERIOD);
-			snd_frames += PERIOD;
+			static int16_t zero[PERIOD * 2];
+			if (pcm_writei(pcm, zero, PERIOD) < 0 || pcm_writei(pcm, out, PERIOD) < 0)
+				pcm_prepare(pcm);
+		} else if (snd_writes++ == 0) {
+			logmsg("sound: the first %d frames played", PERIOD);
 		}
+		snd_frames += PERIOD;
 	}
 	return NULL;
 }
@@ -1953,10 +1988,10 @@ static void sound_open(void)
 	static const unsigned rates[] = {48000, 44100, 32000};
 	for (size_t i = 0; i < 3 && !pcm; i++) {
 		struct pcm_config cfg = {
-			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 4,
-			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD,
+			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 8,
+			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD * 2,
 		};
-		struct pcm *p = pcm_open(0, 0, PCM_OUT, &cfg);
+		struct pcm *p = pcm_open(0, 0, PCM_OUT | PCM_NORESTART, &cfg);
 		if (p && pcm_is_ready(p)) {
 			pcm = p;
 			snd_rate = rates[i];
@@ -2016,13 +2051,30 @@ static void sound_flush(void)
 	if (test_pcm) {
 		fwrite(abuf, 4, abuf_n, test_pcm);
 	} else if (snd_running && abuf_n) {
+		/* the game keeps the clock's time, the card its own: the frame's sound made a hair longer
+		 * when the ring runs low, shorter when it fills (at most 0.5 %, not heard), so it neither
+		 * runs dry nor grows */
+		static int16_t prev;
+		static double pos;                    /* where in this frame's sound the next one is taken */
+		unsigned level = ring_level();
+		const double target = PERIOD * 3;
+		double ratio = 1.0 + 0.005 * (target - (double)level) / target;
+		if (ratio < 0.995) ratio = 0.995;
+		if (ratio > 1.005) ratio = 1.005;
+		double step = 1.0 / ratio;
 		pthread_mutex_lock(&ring_lock);
-		for (size_t i = 0; i < abuf_n; i++) {
+		for (; pos < (double)abuf_n; pos += step) {
+			size_t i = (size_t)pos;
+			double f = pos - (double)i;
+			int16_t a = i ? abuf[2 * (i - 1)] : prev, c = abuf[2 * i];
 			if (ring_w - ring_r >= RING)
-				ring_r++;                 /* full: the oldest goes */
-			ring[ring_w++ % RING] = abuf[2 * i];
+				ring_r++;
+			ring[ring_w++ % RING] = (int16_t)(a + (c - a) * f);
 		}
 		pthread_mutex_unlock(&ring_lock);
+		pos -= (double)abuf_n;
+		prev = abuf[2 * (abuf_n - 1)];
+		drc_ratio = ratio;
 	}
 	abuf_n = 0;
 }
@@ -3585,9 +3637,15 @@ static void sound_menu(bool overlay)
 		char labels[SO_N][96];
 		const char *items[SO_N + 2];
 		for (int i = 0; i < SO_N; i++) {
-			const char *v = sound_opts[i].names[sound_sel[i]];
-			snprintf(labels[i], sizeof labels[i], "%s:  %s", set_en ? sound_opts[i].en : sound_opts[i].pl,
-			         !strcmp(v, "-") ? T("bez zmian", "unchanged") : v);
+			const char *name = set_en ? sound_opts[i].en : sound_opts[i].pl;
+			if (i == SO_VOL)
+				snprintf(labels[i], sizeof labels[i], "%s:  %d %%", name, set_volume);
+			else if (i == SO_AF)
+				snprintf(labels[i], sizeof labels[i], "%s:  %d", name, set_rxvol);
+			else {
+				const char *v = sound_opts[i].names[sound_sel[i]];
+				snprintf(labels[i], sizeof labels[i], "%s:  %s", name, !strcmp(v, "-") ? T("bez zmian", "unchanged") : v);
+			}
 			items[i] = labels[i];
 		}
 		items[SO_N] = T("Zapisz jako domyślne", "Save as the default");
@@ -3603,6 +3661,11 @@ static void sound_menu(bool overlay)
 			const char *l[] = {sound_save() ? T("Zapisane w NES/sound.txt.", "Saved in NES/sound.txt.")
 			                                : T("Nie udało się zapisać.", "Could not save.")};
 			message(T("Dźwięk radia", "Radio sound"), l, 1, 1500);
+		} else if (c == SO_VOL) {
+			set_volume = set_volume >= 300 ? 25 : set_volume + 25;
+		} else if (c == SO_AF) {
+			set_rxvol = set_rxvol >= 55 ? 5 : set_rxvol + 5 > 55 ? 55 : set_rxvol + 5;
+			sound_apply();
 		} else {
 			sound_sel[c] = (sound_sel[c] + 1) % sound_opts[c].n;
 			sound_apply();
@@ -3615,7 +3678,7 @@ static void sound_menu(bool overlay)
 }
 
 /* What the in-game menu can do */
-enum { M_RESUME, M_SAVE, M_LOAD, M_RESET, M_HELP, M_SOUND, M_PAD, M_PAIR, M_LIST, M_OFF, M_N };
+enum { M_RESUME, M_VOLUME, M_SAVE, M_LOAD, M_RESET, M_HELP, M_SOUND, M_PAD, M_PAIR, M_LIST, M_OFF, M_N };
 
 static bool state_exists(int slot)
 {
@@ -3627,12 +3690,14 @@ static bool state_exists(int slot)
 
 static int game_menu(void)
 {
+	char vol[64];
+	snprintf(vol, sizeof vol, T("Głośnik radia: %d z 55  (gałka VOL)", "Radio speaker: %d of 55  (VOL knob)"), set_rxvol);
 	const char *items[M_N] = {
-		T("Wróć do gry", "Back to the game"), T("Zapisz stan", "Save state"),
+		T("Wróć do gry", "Back to the game"), vol, T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
 		T("Reset gry", "Reset the game"), T("Sterowanie", "Controls"), T("Dźwięk radia", "Radio sound"),
 		T("Przyciski pada", "Pad buttons"),
-		T("Bluetooth", "Bluetooth"), T("Lista gier", "Game list"),
+		T("Bluetooth", "Bluetooth"), T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
 		T("Wyłącz radio (start: wybór systemu)", "Radio off (on again: choose a system)"),
 	};
 	int c = menu(cur_base, items, M_N, 0, T("F2 / A: wybierz  GEN: wróć do gry", "F2 / A: choose  GEN: back to the game"), true);
@@ -3645,7 +3710,8 @@ static void help(void)
 	const char *pl[] = {
 		"#Radio",
 		"BAND ▲▼, DFN, DFL: krzyżak · F1: B · F2, PTT: A · F5: A turbo",
-		"F3: Select · F4, MFK: Start · gałki VFO, VOL: kierunki · GEN: menu",
+		"F3: Select · F4, MFK: Start · gałka VFO: lewo/prawo · GEN: menu",
+		"gałka VOL: głośnik radia · gałka MFK: menu",
 		"#Klawiatura",
 		"strzałki · X: A · Z: B · Enter: Start · Shift: Select · C/V: turbo",
 		"Esc: menu · F2: zapisz stan · F4: wczytaj stan",
@@ -3656,7 +3722,8 @@ static void help(void)
 	const char *en[] = {
 		"#Radio",
 		"BAND ▲▼, DFN, DFL: d-pad · F1: B · F2, PTT: A · F5: turbo A",
-		"F3: Select · F4, MFK: Start · VFO, VOL knobs: move · GEN: menu",
+		"F3: Select · F4, MFK: Start · VFO knob: left/right · GEN: menu",
+		"VOL knob: the radio's speaker · MFK knob: the menus",
 		"#Keyboard",
 		"arrows · X: A · Z: B · Enter: Start · Shift: Select · C/V: turbo",
 		"Esc: menu · F2: save state · F4: load state",
@@ -3664,7 +3731,7 @@ static void help(void)
 		"pads 1 and 2 are the players · Home or Select+Start: menu",
 		"mouse: the Zapper light gun (e.g. Duck Hunt)",
 	};
-	message(T("Sterowanie", "Controls"), set_en ? en : pl, 9, 0);
+	message(T("Sterowanie", "Controls"), set_en ? en : pl, 10, 0);
 }
 
 /* A word over the game, top left */
@@ -3770,6 +3837,12 @@ static void play(int idx)
 			case M_LOAD: msg = load_state(0) ? T("Stan wczytany", "State loaded") : T("Brak zapisu", "No saved state"); break;
 			case M_RESET: retro_reset(); break;
 			case M_HELP: help(); break;
+			case M_VOLUME:                    /* a step up, round again from the top; the menu again */
+				set_rxvol = set_rxvol >= 55 ? 5 : set_rxvol + 5 > 55 ? 55 : set_rxvol + 5;
+				sound_apply();
+				sound_save();
+				want_menu = true;
+				break;
 			case M_SOUND: sound_menu(true); break;
 			case M_PAD: learn_pad(); break;
 			case M_PAIR: bt_menu(); break;
@@ -3790,7 +3863,7 @@ static void play(int idx)
 		struct timespec nowts;
 		clock_gettime(CLOCK_MONOTONIC, &nowts);
 		long late_us = (nowts.tv_sec - next.tv_sec) * 1000000L + (nowts.tv_nsec - next.tv_nsec) / 1000;
-		if (!snd_running && late_us > 8000 && skipped < 3) {
+		if (late_us > 8000 && skipped < 3) {
 			skipped++;                        /* behind: this picture skipped, the next one shown */
 			skips++;
 		} else {
@@ -3810,11 +3883,7 @@ static void play(int idx)
 		}
 		sound_flush();
 		frames++;
-		if (snd_running) {                /* the game's time: the card's. On while the ring is low */
-			for (int k = 0; k < 100 && ring_level() > PERIOD * 3; k++)
-				usleep(1000);
-			clock_gettime(CLOCK_MONOTONIC, &next);
-		} else {                          /* no sound: the clock */
+		{                                 /* the game's time: the clock */
 			long step = (long)(1e9 / fps);
 			next.tv_nsec += step;
 			while (next.tv_nsec >= 1000000000L) {
@@ -3840,9 +3909,10 @@ static void play(int idx)
 			f0 = f1;
 			u0 = u1;
 			logmsg("%.1f frames/s (core %.1f ms, picture %.1f ms a frame, %u pictures skipped), sound: the card "
-			       "takes %.0f Hz, %u periods, %u short, %u card errors, %u waiting",
+			       "took %.0f Hz, %u short, %u underruns, %u waiting, stretch %.4f, volume %d %%",
 			       (frames - fps_frames) * 1000.0 / (t - fps_t), core_us / 1000.0 / (frames - fps_frames + 1),
-			       draw_us / 1000.0 / (frames - fps_frames + 1), skips, card_hz, snd_writes, gaps, xruns, ring_level());
+			       draw_us / 1000.0 / (frames - fps_frames + 1), skips, card_hz, gaps, xruns, ring_level(), drc_ratio,
+			       set_volume);
 			core_us = draw_us = 0;
 			skips = 0;
 			fps_t = t;
