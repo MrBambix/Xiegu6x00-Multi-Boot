@@ -57,13 +57,8 @@ def _log_disks():
     lines = []
     try:
         if WIN:
-            from . import win32disk
-            lines.append("system disks: %s" % sorted(win32disk.system_disks()))
-            for n in range(16):
-                d = win32disk.describe(n)
-                if d:
-                    d["letters"] = [c for c in win32disk.letters() if n in win32disk._disks_of_volume(c)]
-                    lines.append("PhysicalDrive%d: %r" % (n, d))
+            lines.append(json.dumps(_ps("Get-Disk | Select-Object Number,FriendlyName,Size,BusType,IsBoot,IsSystem,"
+                                        "IsOffline,IsReadOnly,PartitionStyle | ConvertTo-Json"), indent=1))
         elif MAC:
             r = _run(["diskutil", "list", "-plist"])
             for disk in plistlib.loads(r.stdout).get("WholeDisks", []):
@@ -142,9 +137,31 @@ def _list_mac():
     return out
 
 
+def _ps(script):
+    r = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script])
+    if r.returncode:
+        raise DeviceError("PowerShell: " + r.stderr.decode(errors="replace"))
+    t = r.stdout.decode(errors="replace").strip()
+    return json.loads(t) if t else []
+
+
 def _list_windows():
-    from . import win32disk
-    return win32disk.list_disks(MAX_CARD)
+    disks = _ps("Get-Disk | Select-Object Number,FriendlyName,Size,BusType,IsBoot,IsSystem | ConvertTo-Json")
+    if isinstance(disks, dict):
+        disks = [disks]
+    out = []
+    for d in disks:
+        bus = str(d.get("BusType"))
+        if d.get("IsBoot") or d.get("IsSystem"):
+            continue
+        if bus not in ("USB", "SD", "MMC", "7", "12", "13"):
+            continue
+        size = int(d.get("Size") or 0)
+        if not size or size > MAX_CARD:
+            continue
+        out.append({"path": r"\\.\PhysicalDrive%d" % d["Number"], "name": d.get("FriendlyName") or "",
+                    "size": size, "bus": bus, "mounts": [], "number": d["Number"]})
+    return out
 
 
 def device_of(mount):
@@ -152,9 +169,8 @@ def device_of(mount):
     None: for a card the list above does not show but whose DATA the computer has mounted"""
     try:
         if WIN:
-            from . import win32disk
-            n = win32disk.disk_of_letter(mount[0])
-            return None if n is None else r"\\.\PhysicalDrive%d" % n
+            n = _ps("(Get-Partition -DriveLetter '%s').DiskNumber" % mount[0])
+            return r"\\.\PhysicalDrive%d" % int(n)
         if MAC:
             info = plistlib.loads(_run(["diskutil", "info", "-plist", mount]).stdout)
             whole = info.get("ParentWholeDisk")
@@ -181,14 +197,13 @@ def prepare_for_write(dev):
     if not is_listed(dev):
         raise DeviceError(f"{dev} is not a removable card (or not plugged in)")
     if WIN:
-        # The card's volumes locked and dismounted (held until after_write): Windows then lets the
-        # whole card be written and opens no window for its partitions meanwhile
-        from . import win32disk
         n = int(re.search(r"(\d+)$", dev).group(1))
-        try:
-            return win32disk.take(n)
-        except OSError as e:
-            raise DeviceError(str(e))
+        script = f"select disk {n}\nattributes disk clear readonly\nclean\nrescan\n"
+        r = _run(["diskpart"], input=script.encode())
+        if r.returncode:
+            raise DeviceError("diskpart could not clear the card: " + r.stdout.decode(errors="replace")[-400:])
+        size = int(_ps(f"(Get-Disk -Number {n}).Size"))
+        return size
     if MAC:
         r = _run(["diskutil", "unmountDisk", "force", dev])
         if r.returncode:
@@ -212,8 +227,6 @@ def unmount(dev):
     """What the computer mounted of dev let go, the card itself left as it is (before writing one
     of its areas). Windows: nothing; it lets the areas outside the partition table be written."""
     if WIN:
-        from . import win32disk
-        win32disk.take(int(re.search(r"(\d+)$", dev).group(1)))
         return
     if MAC:
         r = _run(["diskutil", "unmountDisk", "force", dev])
@@ -229,11 +242,6 @@ def unmount(dev):
 
 
 def after_write(dev):
-    if WIN and not os.path.isfile(dev):
-        from . import win32disk
-        m = re.search(r"(\d+)$", dev)
-        win32disk.release(int(m.group(1)) if m else None)
-        return
     if MAC:
         _run(["diskutil", "eject", dev])
     elif not WIN and os.path.exists(dev) and not os.path.isfile(dev):

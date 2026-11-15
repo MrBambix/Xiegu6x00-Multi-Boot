@@ -185,9 +185,10 @@ Jeśli system Xiegu z eMMC się nie uruchomi, menu pokaże na ekranie zawartoś�
 zrób zdjęcie i dołącz je do zgłoszenia.
 
 **Windows Defender albo SmartScreen ostrzega przed aplikacją.** Aplikacja nie jest podpisana certyfikatem
-(płatnym), więc Windows jej „nie zna”. Od wersji z folderem w `.zip` aplikacja nie uruchamia już żadnych
-programów pomocniczych (PowerShell, diskpart) ani nie zmienia ustawień systemu; jeśli mimo to Defender ją
-zatrzyma, zgłoś fałszywy alarm na https://www.microsoft.com/wdsi/filesubmission (plik `.exe` z folderu).
+(płatnym), więc Windows jej „nie zna”. Od wersji z folderem w `.zip` aplikacja nie zmienia ustawień
+systemu ani nie zamyka okien innych programów; kartę przygotowuje systemowym `diskpart`. Jeśli mimo to
+Defender ją zatrzyma, zgłoś fałszywy alarm na https://www.microsoft.com/wdsi/filesubmission (plik `.exe`
+z folderu).
 
 ## English
 

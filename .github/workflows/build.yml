@@ -93,25 +93,20 @@ jobs:
       - run: pip install pillow==11.0.0 certifi sv-ttk==2.6.0
       # PyInstaller's own ready-made Windows starter is in a great many programs, bad ones too, and
       # virus scanners flag it; one built here from its source is this app's own
-      # The Windows disk calls on a real Windows: the system disk found, every disk looked at,
-      # the system disk never offered as a card
+      # The card list on a real Windows: the system disk never offered as a card
       - name: Windows disks
         if: runner.os == 'Windows'
         shell: bash
         run: |
           python - <<'PY'
-          from x6100mb import devices, win32disk
-          sysd = win32disk.system_disks()
-          print("system disks:", sysd)
-          assert sysd, "the system disk was not found"
-          for n in range(4):
-              print(n, win32disk.describe(n))
-          d0 = win32disk.describe(min(sysd))
-          assert d0 and d0["size"] > 10**9, "a disk's size was not read: %r" % (d0,)
+          from x6100mb import devices
           cards = devices.list_cards()
           print("cards:", cards)
-          assert all(int(c["path"].rsplit("e", 1)[1]) not in sysd for c in cards)
-          print("C: lies on disk", win32disk.disk_of_letter("C"))
+          disks = devices._ps("Get-Disk | Select-Object Number,IsBoot,IsSystem | ConvertTo-Json")
+          disks = [disks] if isinstance(disks, dict) else disks
+          sysd = {d["Number"] for d in disks if d.get("IsBoot") or d.get("IsSystem")}
+          print("system disks:", sysd)
+          assert sysd and all(c["number"] not in sysd for c in cards)
           PY
       - name: "PyInstaller (Windows: its starter built from source)"
         if: runner.os == 'Windows'
