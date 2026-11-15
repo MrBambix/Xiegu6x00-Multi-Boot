@@ -834,7 +834,6 @@ class App:
         ColorButton(col, t("+ Emulator NES"), "secondary", self.add_nes, image=self._nes_img,
                     pady=5).pack(fill="x", pady=(6, 0))
         ColorButton(col, t("Gry NES…"), "secondary", self.nes_games).pack(fill="x", pady=(6, 0))
-        ColorButton(col, t("Folder z grami NES…"), "secondary", self.nes_folder).pack(fill="x", pady=(6, 0))
         ColorButton(col, t("Przeczytaj najpierw"), "danger", self.doom_readme).pack(fill="x", pady=(6, 0))
 
     def add_nes(self):
@@ -849,49 +848,20 @@ class App:
             return
         self.entries.append({"kind": "nes", "name": NES_NAME, "games": []})
         self._redraw(len(self.entries) - 1)
-        self.nes_games()                              # the games straight away: the files chosen
-
-    def nes_folder(self):
-        """A folder of the user's NES games (subfolders, .zip archives and pictures too) for the card"""
-        nes = next((e for e in self.entries if e["kind"] == "nes"), None)
-        if nes is None:
-            self.add_nes()
-            return
-        folder = filedialog.askdirectory(title=t("Folder z grami NES (anuluj: bez gier, dodasz je później)"),
-                                         mustexist=True)
-        if folder:
-            self._nes_add(nes, [folder])
-
-    def _nes_add(self, nes, paths):
-        from .compose import ComposeError, nes_games, nes_pictures
-        try:
-            found = nes_games(list(paths)) or nes_pictures(list(paths))
-        except ComposeError as e:
-            messagebox.showerror(APP, str(e))
-            return
-        if not found:
-            messagebox.showwarning(APP, t("W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf)."))
-            return
-        have = {os.path.normcase(os.path.abspath(p)) for p in nes["games"]}
-        nes["games"] = list(nes["games"]) + [p for p in paths if os.path.normcase(os.path.abspath(p)) not in have]
-        self.selected = self.entries.index(nes)
-        self._redraw(self.selected)
-        messagebox.showinfo(APP, t("Gry NES do wgrania na kartę: {n}. Trafią do folderu NES na partycji BOOT; "
-                                   "później możesz dokładać kolejne prosto z komputera.",
-                                   n=len(nes_games(nes["games"]))))
+        self.nes_games()                              # the games straight away
 
     def nes_games(self):
-        """The user's own NES games for the card (files or .zip archives of them); none come with the app"""
+        """The user's own NES games for the card, in a small window of their own: a list, added to
+        with + (files, or a whole folder), taken from with Remove; none come with the app"""
         nes = next((e for e in self.entries if e["kind"] == "nes"), None)
         if nes is None:
-            self.add_nes()                            # it asks for the games itself
+            self.add_nes()                            # it opens this itself
             return
-        paths = filedialog.askopenfilenames(
-            title=t("Gry NES: zaznacz pliki (Ctrl+A: wszystkie z folderu; anuluj: bez gier, dodasz je później)"),
-            filetypes=[(t("Gry NES"), "*.nes *.NES *.fds *.FDS *.unf *.UNF *.unif *.nsf *.NSF *.zip *.ZIP *.png *.PNG *.jpg *.JPG *.jpeg *.bmp *.BMP"),
-                       (t("Wszystkie pliki"), "*")])
-        if paths:
-            self._nes_add(nes, list(paths))
+        win = getattr(self, "_nes_win", None)
+        if win is not None and win.win.winfo_exists():
+            win.win.lift()
+            return
+        self._nes_win = NesGamesDialog(self, nes)
 
     def add_doom(self):
         if any(e["kind"] == "doom" for e in self.entries):
@@ -1504,6 +1474,108 @@ class OnlineDialog:
         self.win.destroy()          # first: the progress window then comes up over the main window
         app, text = self.app, t("Pobieranie {name} {tag}", name=src["name"], tag=rel["tag"])
         app.root.after(50, lambda: app._job(text, app._fetch_and_add, src, rel, steps=["download", "unzip"]))
+
+
+class NesGamesDialog:
+    """The NES games chosen for the card: a list, "+ Games…" and "+ Folder…" add to it, one at a
+    time, without the window closing; "Remove" takes the selected off; the pictures go with them"""
+
+    def __init__(self, app, nes):
+        self.app, self.nes = app, nes
+        self.win = tk.Toplevel(app.root)
+        self.win.title(t("Gry NES na kartę"))
+        self.win.transient(app.root)
+        self.win.minsize(460, 360)
+        box = ttk.Frame(self.win)
+        box.pack(fill="both", expand=True, padx=16, pady=14)
+        ttk.Label(box, text=t("Gry NES na kartę"), font=_font(12, "bold")).pack(anchor="w")
+        ttk.Label(box, text=t("Dokładaj gry po kolei przyciskiem +. Trafią do folderu NES na partycji BOOT; "
+                              "obrazki gier o tej samej nazwie (.png, .jpg) też."),
+                  foreground=HINT, wraplength=520, justify="left").pack(anchor="w", pady=(2, 8))
+        lf = ttk.Frame(box)
+        lf.pack(fill="both", expand=True)
+        self.lb = tk.Listbox(lf, selectmode="extended", activestyle="none", height=12, relief="flat",
+                             highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
+                             bg=SOFT, fg=TEXT_FG, selectbackground=ACCENT, selectforeground="#ffffff",
+                             font=_font(11))
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self.lb.yview)
+        self.lb.configure(yscrollcommand=sb.set)
+        self.lb.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.lb.bind("<Delete>", lambda _e: self.remove())
+        self.lb.bind("<BackSpace>", lambda _e: self.remove())
+        self.count = ttk.Label(box, text="", foreground=HINT)
+        self.count.pack(anchor="w", pady=(6, 8))
+        row = ttk.Frame(box)
+        row.pack(fill="x")
+        ColorButton(row, t("+ Gry…"), "secondary", self.add_files).pack(side="left")
+        ColorButton(row, t("+ Folder…"), "secondary", self.add_folder).pack(side="left", padx=(8, 0))
+        ColorButton(row, t("Usuń"), "secondary", self.remove).pack(side="left", padx=(8, 0))
+        ColorButton(row, t("Gotowe"), "primary", self.close).pack(side="right")
+        self.win.protocol("WM_DELETE_WINDOW", self.close)
+        self.fill()
+        self.win.after(150, self.add_files if not nes["games"] else (lambda: None))   # the first ones at once
+
+    def fill(self):
+        from .compose import nes_games, nes_pictures, NES_GAMES
+        self.lb.delete(0, "end")
+        for p in self.nes["games"]:
+            name = os.path.basename(os.path.normpath(p))
+            if os.path.isdir(p):
+                n = len(nes_games([p]))
+                name = "\U0001F4C1 " + name + "  " + t("(folder, gier: {n})", n=n)
+            elif p.lower().endswith(".zip"):
+                name = name + "  " + t("(archiwum, gier: {n})", n=len(nes_games([p])))
+            elif not p.lower().endswith(NES_GAMES):
+                name = name + "  " + t("(obrazek)")
+            self.lb.insert("end", name)
+        games, pics = nes_games(self.nes["games"]), nes_pictures(self.nes["games"])
+        self.count.configure(text=t("Gier: {n}, obrazków: {m}", n=len(games), m=len(pics)) if games or pics
+                             else t("Na razie bez gier: dodaj je przyciskiem + albo później do folderu NES."))
+
+    def _add(self, paths):
+        from .compose import ComposeError, nes_games, nes_pictures
+        try:
+            found = nes_games(list(paths)) or nes_pictures(list(paths))
+        except ComposeError as e:
+            messagebox.showerror(APP, str(e), parent=self.win)
+            return
+        if not found:
+            messagebox.showwarning(APP, t("W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf)."),
+                                   parent=self.win)
+            return
+        have = {os.path.normcase(os.path.abspath(p)) for p in self.nes["games"]}
+        self.nes["games"] = list(self.nes["games"]) + [p for p in paths
+                                                       if os.path.normcase(os.path.abspath(p)) not in have]
+        self.fill()
+        self.lb.see("end")
+
+    def add_files(self):
+        paths = filedialog.askopenfilenames(
+            parent=self.win, title=t("Gry NES (.nes, .fds, .unf, .nsf, .zip; obrazki .png, .jpg)"),
+            filetypes=[(t("Gry NES"), "*.nes *.NES *.fds *.FDS *.unf *.UNF *.unif *.nsf *.NSF *.zip *.ZIP "
+                                      "*.png *.PNG *.jpg *.JPG *.jpeg *.bmp *.BMP"),
+                       (t("Wszystkie pliki"), "*")])
+        if paths:
+            self._add(list(paths))
+
+    def add_folder(self):
+        folder = filedialog.askdirectory(parent=self.win, title=t("Folder z grami NES"), mustexist=True)
+        if folder:
+            self._add([folder])
+
+    def remove(self):
+        sel = set(self.lb.curselection())
+        if sel:
+            self.nes["games"] = [p for i, p in enumerate(self.nes["games"]) if i not in sel]
+            self.fill()
+
+    def close(self):
+        app = self.app
+        if self.nes in app.entries:
+            app.selected = app.entries.index(self.nes)
+            app._redraw(app.selected)
+        self.win.destroy()
 
 
 class CardDataDialog:

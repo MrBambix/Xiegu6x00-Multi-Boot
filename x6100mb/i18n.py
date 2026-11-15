@@ -443,11 +443,21 @@ EN = {
     "Emulator NES uruchamia się z jądrem systemu z obrazu (np. OpenX6X00). Dodaj najpierw taki system, potem emulator.":
         "The NES emulator starts with the kernel of a system from an image (e.g. OpenX6X00). Add such a system "
         "first, then the emulator.",
-    "Gry NES: zaznacz pliki (Ctrl+A: wszystkie z folderu; anuluj: bez gier, dodasz je później)":
-        "NES games: select the files (Ctrl+A: the whole folder's; cancel: no games, add them later)",
     "Gry NES": "NES games",
-    "Folder z grami NES…": "NES games folder…",
-    "Folder z grami NES (anuluj: bez gier, dodasz je później)": "A folder of NES games (cancel: no games, add them later)",
+    "Gry NES na kartę": "NES games for the card",
+    "Dokładaj gry po kolei przyciskiem +. Trafią do folderu NES na partycji BOOT; obrazki gier o tej samej nazwie (.png, .jpg) też.":
+        "Add games one after another with +. They go to the NES folder on the BOOT partition; "
+        "pictures named like the games (.png, .jpg) too.",
+    "+ Gry…": "+ Games…",
+    "+ Folder…": "+ Folder…",
+    "(folder, gier: {n})": "(folder, {n} games)",
+    "(archiwum, gier: {n})": "(archive, {n} games)",
+    "(obrazek)": "(picture)",
+    "Gier: {n}, obrazków: {m}": "Games: {n}, pictures: {m}",
+    "Na razie bez gier: dodaj je przyciskiem + albo później do folderu NES.":
+        "No games yet: add them with + or later to the NES folder.",
+    "Gry NES (.nes, .fds, .unf, .nsf, .zip; obrazki .png, .jpg)": "NES games (.nes, .fds, .unf, .nsf, .zip; pictures .png, .jpg)",
+    "Folder z grami NES": "A folder of NES games",
     "Wszystkie pliki": "All files",
     "W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf).":
         "The chosen files hold no NES games (.nes, .fds, .unf, .nsf).",
