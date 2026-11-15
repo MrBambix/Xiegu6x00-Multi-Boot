@@ -1941,7 +1941,13 @@ static void *snd_thread(void *arg)
 		}
 		ring_r += have < PERIOD ? have : PERIOD;
 		pthread_mutex_unlock(&ring_lock);
-		int r = pcm_writei(pcm, out, PERIOD);
+		int r;
+		if (pcm) {
+			r = pcm_writei(pcm, out, PERIOD);
+		} else {                                  /* the PC test's pretend card: 48 kHz of time */
+			usleep(PERIOD * 1000000u / 48000u);
+			r = PERIOD;
+		}
 		if (r < 0) {
 			if (xruns++ < 5)
 				logmsg("sound: write: %s", pcm_get_error(pcm));
@@ -2002,6 +2008,12 @@ static void sound_open(void)
 		const char *p = getenv("NES_TEST_PCM");
 		if (p)
 			test_pcm = fopen(p, "wb");
+		if (getenv("NES_TEST_SNDTHREAD")) {   /* the sound thread with a pretend card */
+			pthread_t t;
+			snd_running = true;
+			pthread_create(&t, NULL, snd_thread, NULL);
+			pthread_detach(t);
+		}
 		return;
 	}
 	set_mixer();
@@ -3587,56 +3599,11 @@ static void learn_pad(void)
 	input_settle();
 }
 
-/* A tune for the Sound menu, our own: a square-wave arpeggio over a triangle bass, a noise tick on
- * each beat, as an NES game sounds; made as it plays, into the sound's ring */
-static uint64_t tune_start, tune_done;
-static uint32_t tune_lfsr = 1;
-
-static int16_t tune_sample(uint64_t n)
-{
-	static const int notes[16] = {523, 659, 784, 1047, 784, 659, 587, 494, 440, 554, 659, 880, 740, 659, 554, 494};
-	unsigned step = snd_rate * 160 / 1000;                    /* 160 ms a note */
-	unsigned k = (unsigned)(n / step) % 16, in = (unsigned)(n % step);
-	double t = (double)n / snd_rate;
-	int32_t v = 0;
-	double ph = t * notes[k] - (double)(long)(t * notes[k]);
-	v += ph < 0.25 ? 5000 : -5000;                            /* square, 25 % duty */
-	double pb = t * notes[k & 12] / 4 - (double)(long)(t * notes[k & 12] / 4);
-	v += (int32_t)((pb < 0.5 ? pb * 4 - 1 : 3 - pb * 4) * 4000);   /* triangle bass */
-	if ((k & 3) == 0 && in < snd_rate / 40) {                  /* a noise tick, 25 ms */
-		tune_lfsr = (tune_lfsr >> 1) ^ (-(tune_lfsr & 1u) & 0xB400u);
-		v += (tune_lfsr & 1) ? 2500 : -2500;
-	}
-	if (in > step - snd_rate / 100)                            /* a gap between the notes */
-		v /= 4;
-	return soft_limit(v * 3 * set_volume / 100);
-}
-
-static void tune_tick(void)
-{
-	if (!snd_running)
-		return;
-	uint64_t want = (now_us() - tune_start) * snd_rate / 1000000 + 2048;
-	pthread_mutex_lock(&ring_lock);
-	for (; tune_done < want; tune_done++) {
-		if (ring_w - ring_r >= RING)
-			ring_r++;
-		ring[ring_w++ % RING] = tune_sample(tune_done);
-	}
-	pthread_mutex_unlock(&ring_lock);
-}
-
-/* The radio's sound path, tried live: each choice changes one setting at once, the tune plays on */
+/* The sound's levels: each choice changes one at once (heard in the game) */
 static void game_to_canvas(void);
 
 static void sound_menu(bool overlay)
 {
-	tune_start = now_us();
-	tune_done = 0;
-	pthread_mutex_lock(&ring_lock);
-	ring_r = ring_w;
-	pthread_mutex_unlock(&ring_lock);
-	menu_tick = tune_tick;
 	int sel = 0;
 	for (;;) {
 		static const int shown[] = {SO_AF, SO_VOL, SO_HP};
@@ -3684,10 +3651,6 @@ static void sound_menu(bool overlay)
 			sound_apply();
 		}
 	}
-	menu_tick = NULL;
-	pthread_mutex_lock(&ring_lock);
-	ring_r = ring_w;
-	pthread_mutex_unlock(&ring_lock);
 }
 
 /* What the in-game menu can do */
@@ -3999,11 +3962,11 @@ static void game_side(int sel, int x, int y, int w, int h)
 	} else {
 		static const char *pl[] = {"Pady, klawiatury i myszy: szukanie, parowanie, lista sparowanych.",
 		                           "Własny układ przycisków pada, naciskany po kolei.",
-		                           "Głośność gry, głośnik radia i wyjście dźwięku, słychać od razu na melodii.",
+		                           "Głośność (AF), głośność gry i wyjście dźwięku.",
 		                           "Radio wyłącza się całkiem. Po włączeniu: menu wyboru systemu."};
 		static const char *en[] = {"Pads, keyboards and mice: looking, pairing, the paired list.",
 		                           "Your own pad layout, pressed in turn.",
-		                           "The game's volume, the radio's speaker and the output, heard at once on a tune.",
+		                           "The volume (AF), the game's volume and the output.",
 		                           "The radio switches off. On again: the menu to choose a system."};
 		int k = sel - (list_games ? list_games : 1);
 		if (k >= 0 && k < 4)
