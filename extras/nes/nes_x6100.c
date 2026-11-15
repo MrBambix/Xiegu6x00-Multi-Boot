@@ -412,6 +412,15 @@ static unsigned fb_w, fb_h, fb_stride, fb_bpp;
 static struct fb_var_screeninfo vinfo;
 static int rotate = 3;                          /* 3: as fbcon=rotate:3; 1: the other way; 0: none */
 static bool fb_native;                          /* 32 bpp XRGB: pixels as they are */
+static bool fb_32;                              /* 32 bpp, its colours at any offsets */
+static unsigned fb_ro = 16, fb_go = 8, fb_bo = 0;
+
+static inline uint32_t to_fb32(uint32_t p)
+{
+	if (fb_native)
+		return p;
+	return (((p >> 16) & 0xffu) << fb_ro) | (((p >> 8) & 0xffu) << fb_go) | ((p & 0xffu) << fb_bo);
+}
 static uint32_t canvas[LAND_H * LAND_W];        /* the menus are drawn here, landscape */
 
 static inline void put(unsigned fx, unsigned fy, uint32_t p)
@@ -450,11 +459,11 @@ static void present(int x, int y, int w, int h)
 	if (y < 0) { h += y; y = 0; }
 	if (x + w > LAND_W) w = LAND_W - x;
 	if (y + h > LAND_H) h = LAND_H - y;
-	if (rotate == 3 && fb_native && w > 0 && h > 0) {
+	if (rotate == 3 && fb_32 && w > 0 && h > 0) {
 		for (int lx = x; lx < x + w && (unsigned)lx < fb_h; lx++) {
 			uint32_t *dst = (uint32_t *)(fb + (fb_h - 1 - (unsigned)lx) * fb_stride);
 			for (int ly = y; ly < y + h && (unsigned)ly < fb_w; ly++)
-				dst[ly] = canvas[ly * LAND_W + lx];
+				dst[ly] = to_fb32(canvas[ly * LAND_W + lx]);
 		}
 		return;
 	}
@@ -2080,28 +2089,26 @@ static void draw_game(void)
 	frame_new = false;
 	if (frame_w != mapped_w || frame_h != mapped_h)
 		setup_maps();
-	if (rotate == 3 && fb_native && pixfmt == RETRO_PIXEL_FORMAT_XRGB8888) {
-		/* a landscape column is a framebuffer row: one row per column, a repeated column copied */
-		uint32_t *prev = NULL;
+	if (rotate == 3 && fb_32 && pixfmt == RETRO_PIXEL_FORMAT_XRGB8888) {
+		/* a landscape column is a framebuffer row. Each made once in ordinary memory (the
+		 * screen's own memory is not cached: never read back from it), then written as a row */
+		static uint32_t colbuf[LAND_H];
 		for (int x = 0; x < gw; x++) {
 			unsigned lx = (unsigned)(gx0 + x);
 			if (lx >= fb_h)
 				break;
-			uint32_t *dst = (uint32_t *)(fb + (fb_h - 1 - lx) * fb_stride) + gy0;
-			if (prev && map_x[x] == map_x[x - 1]) {
-				memcpy(dst, prev, (size_t)gh * 4);
-			} else {
+			if (x == 0 || map_x[x] != map_x[x - 1]) {
 				const uint8_t *col = (const uint8_t *)frame_data + map_x[x] * 4;
 				int y = 0;
 				while (y < gh) {
 					unsigned sy = map_y[y];
-					uint32_t p = *(const uint32_t *)(col + sy * frame_pitch);
-					dst[y++] = p;
+					uint32_t p = to_fb32(*(const uint32_t *)(col + sy * frame_pitch));
+					colbuf[y++] = p;
 					while (y < gh && map_y[y] == sy)
-						dst[y++] = p;
+						colbuf[y++] = p;
 				}
 			}
-			prev = dst;
+			memcpy((uint32_t *)(fb + (fb_h - 1 - lx) * fb_stride) + gy0, colbuf, (size_t)gh * 4);
 		}
 		return;
 	}
@@ -3724,6 +3731,8 @@ static void play(int idx)
 	input_settle();
 	uint32_t last_save = now_ms(), fps_t = now_ms();
 	uint64_t core_us = 0, draw_us = 0;
+	int skipped = 0;
+	unsigned skips = 0;
 	bool osd_shown = false;
 	unsigned frames = 0, fps_frames = 0;
 	int test_frames = test_mode ? (getenv("NES_TEST_FRAMES") ? atoi(getenv("NES_TEST_FRAMES")) : 300) : 0;
@@ -3765,7 +3774,16 @@ static void play(int idx)
 		uint64_t t1 = now_us();
 		retro_run();
 		uint64_t t2 = now_us();
-		draw_game();
+		struct timespec nowts;
+		clock_gettime(CLOCK_MONOTONIC, &nowts);
+		long late_us = (nowts.tv_sec - next.tv_sec) * 1000000L + (nowts.tv_nsec - next.tv_nsec) / 1000;
+		if (late_us > 8000 && skipped < 3) {
+			skipped++;                        /* behind: this picture skipped, the next one shown */
+			skips++;
+		} else {
+			skipped = 0;
+			draw_game();
+		}
 		draw_us += now_us() - t2;
 		core_us += t2 - t1;
 		if (note_until && (int32_t)(now_ms() - note_until) < 0) {   /* a word for a while, top left */
@@ -3799,10 +3817,12 @@ static void play(int idx)
 			save_sram();
 		}
 		if (t - fps_t >= 10000) {
-			logmsg("%.1f frames/s (core %.1f ms, picture %.1f ms a frame), sound: %u periods, %u short, %u card errors",
-			       (frames - fps_frames) * 1000.0 / (t - fps_t), core_us / 1000.0 / (frames - fps_frames + 1),
-			       draw_us / 1000.0 / (frames - fps_frames + 1), snd_writes, gaps, xruns);
+			logmsg("%.1f frames/s (core %.1f ms, picture %.1f ms a frame, %u pictures skipped), sound: %u periods, "
+			       "%u short, %u card errors", (frames - fps_frames) * 1000.0 / (t - fps_t),
+			       core_us / 1000.0 / (frames - fps_frames + 1), draw_us / 1000.0 / (frames - fps_frames + 1), skips,
+			       snd_writes, gaps, xruns);
 			core_us = draw_us = 0;
+			skips = 0;
 			fps_t = t;
 			fps_frames = frames;
 		}
@@ -4076,6 +4096,7 @@ static bool test_fb(void)
 	fb_bpp = 4;
 	fb_stride = fb_w * 4;
 	fb_native = true;
+	fb_32 = true;
 	fb = calloc(fb_stride, fb_h);
 	test_mode = true;
 	return true;
@@ -4099,6 +4120,12 @@ static void screen_init(void)
 	if (fb_w > fb_h)
 		rotate = 0;                   /* a landscape framebuffer needs no turning */
 	fb_native = fb_bpp == 4 && vinfo.red.offset == 16 && vinfo.green.offset == 8 && vinfo.blue.offset == 0;
+	fb_32 = fb_bpp == 4;
+	fb_ro = vinfo.red.offset;
+	fb_go = vinfo.green.offset;
+	fb_bo = vinfo.blue.offset;
+	logmsg("screen colours: red at %u, green at %u, blue at %u (%s)", fb_ro, fb_go, fb_bo,
+	       fb_native ? "as they are" : "turned");
 	fb = mmap(NULL, fb_stride * fb_h, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
 	if (fb == MAP_FAILED) {
 		logmsg("mmap /dev/fb0: %s", strerror(errno));
