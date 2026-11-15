@@ -12,7 +12,8 @@
  * 800x480 screen, turned into the portrait panel's framebuffer as fbcon=rotate:3 does.
  * Input: the radio's keys and knobs, USB and Bluetooth keyboards, mice (the Zapper, for the games
  * that use it) and pads (HID: two players). Sound: the SoC's codec to the radio's speaker.
- * Leaving restarts the radio into the boot menu; POWER switches it off.
+ * Leaving switches the radio off (on the X6100 a restart of the processor takes the power with
+ * it); switched on again, the radio shows the boot menu. POWER switches it off too.
  */
 #define _GNU_SOURCE             /* posix_openpt, ptsname: the pseudo-terminal for bluetoothctl */
 #include <ctype.h>
@@ -798,6 +799,7 @@ struct dev {
 	uint32_t held;                     /* libretro bits */
 	bool joyclass;                     /* buttons from BTN_TRIGGER on (cheap USB pads), not BTN_SOUTH */
 	uint32_t sel_since;                /* Select held since */
+	uint16_t vendor, product;          /* the USB/Bluetooth ids: who made it */
 	const char *profile;               /* the layout taken by default: "Xbox", "PlayStation"... */
 };
 
@@ -981,18 +983,22 @@ static void default_map(struct dev *d)
 	static const char *nin[] = {"pro controller", "joy-con", "nintendo", "switch", NULL};
 	struct padmap *m = &d->map;
 	memset(m, 0, sizeof *m);
-	if (name_has(d->name, xbox)) {           /* A B _ X Y _ LB RB _ _ View Menu Xbox */
+	/* by who made it first (a Bluetooth LE pad may call itself "bluez-hog-device"), then by its name */
+	bool is_xbox = d->vendor == 0x045e || name_has(d->name, xbox);
+	bool is_ps = d->vendor == 0x054c || (!is_xbox && name_has(d->name, ps));
+	bool is_nin = d->vendor == 0x057e || (!is_xbox && !is_ps && name_has(d->name, nin));
+	if (is_xbox) {                           /* A B _ X Y _ LB RB _ _ View Menu Xbox */
 		d->profile = "Xbox";                 /* by the letters: Xbox A is NES A, Xbox B is NES B */
 		bind_key(m, J_A, BTN_SOUTH); bind_key(m, J_B, BTN_EAST);
 		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_WEST);
 		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
-	} else if (name_has(d->name, ps)) {      /* Square Cross Circle Triangle L1 R1 L2 R2 Share Options L3 R3 PS */
+	} else if (is_ps) {      /* Square Cross Circle Triangle L1 R1 L2 R2 Share Options L3 R3 PS */
 		d->profile = "PlayStation";
 		bind_key(m, J_A, BTN_C);     bind_key(m, J_B, BTN_EAST);      /* Circle, Cross */
 		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_SOUTH);     /* Triangle, Square: turbo */
 		bind_key(m, J_SELECT, BTN_TL2); bind_key(m, J_START, BTN_TR2);
 		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
-	} else if (name_has(d->name, nin)) {     /* B A Y X L R ZL ZR - + LS RS Home (8BitDo in Switch mode too) */
+	} else if (is_nin) {                     /* B A Y X L R ZL ZR - + LS RS Home (8BitDo in Switch mode too) */
 		d->profile = "Nintendo";
 		bind_key(m, J_A, BTN_EAST);  bind_key(m, J_B, BTN_SOUTH);
 		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_C);
@@ -1003,12 +1009,11 @@ static void default_map(struct dev *d)
 		bind_key(m, J_A, BTN_THUMB);   bind_key(m, J_B, BTN_THUMB2);
 		bind_key(m, J_X, BTN_TRIGGER); bind_key(m, J_Y, BTN_TOP);
 		bind_key(m, J_SELECT, BTN_BASE3); bind_key(m, J_START, BTN_BASE4);
-	} else {                                  /* 8BitDo and the like (D-input), Android-mode pads */
+	} else {                                  /* the rest by the letters, as Linux names them: BTN_A is A */
 		d->profile = T("ogólny", "generic");
-		bind_key(m, J_A, BTN_EAST);  bind_key(m, J_B, BTN_SOUTH);
+		bind_key(m, J_A, BTN_SOUTH); bind_key(m, J_B, BTN_EAST);
 		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_WEST);
 		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
-		bind_key(m, J_A, BTN_C);
 	}
 	add_directions(m);
 }
@@ -1270,6 +1275,11 @@ static void open_inputs(void)
 			memset(kb, 0, sizeof kb);
 			ioctl(fd, EVIOCGBIT(EV_KEY, sizeof kb), kb);
 			v->joyclass = TEST_BIT(kb, BTN_TRIGGER) && !TEST_BIT(kb, BTN_SOUTH);
+			struct input_id iid;
+			if (ioctl(fd, EVIOCGID, &iid) == 0) {
+				v->vendor = iid.vendor;
+				v->product = iid.product;
+			}
 			unsigned char abs[ABS_MAX / 8 + 1];
 			memset(abs, 0, sizeof abs);
 			ioctl(fd, EVIOCGBIT(EV_ABS, sizeof abs), abs);
@@ -1295,7 +1305,7 @@ static void open_inputs(void)
 			note(T("Mysz: %.60s", "Mouse: %.60s"), v->name);
 		}
 		static const char *roles[] = {"radio", "mouse", "keyboard", "pad"};
-		logmsg("input %s: \"%s\" -> %s%s%s", e->d_name, v->name, roles[v->role],
+		logmsg("input %s: \"%s\" (%04x:%04x) -> %s%s%s", e->d_name, v->name, v->vendor, v->product, roles[v->role],
 		       v->role == ROLE_PAD ? (v->port ? " (player 2), layout " : " (player 1), layout ") : "",
 		       v->role == ROLE_PAD ? v->profile : "");
 		pfd[n_devs].fd = fd;
@@ -1837,45 +1847,38 @@ static int16_t soft_limit(int32_t v)
 	return (int16_t)(v < 0 ? -a : a);
 }
 
+/* The card is the clock: this thread hands it a period whenever the game has made one, and the
+ * game (play()) runs as fast as the card takes its sound (a ring level it keeps). Silence goes in
+ * only when the game makes none for a while (a menu open): the card never runs dry mid-sound */
+static volatile uint64_t snd_frames;          /* frames given to the card */
+static volatile uint64_t snd_since_us;
+
 static void *snd_thread(void *arg)
 {
 	(void)arg;
 	static int16_t out[PERIOD * 2];
 	int16_t last = 0;
-	bool primed = false;
+	snd_since_us = now_us();
 	while (snd_running) {
-		/* the first time and after a gap: a cushion of two periods first; a late frame waited
-		 * for a moment (up to 12 ms) rather than a hole in the sound */
-		for (int k = 0; k < 6; k++) {
+		unsigned have = 0;
+		for (int k = 0; k < 60; k++) {           /* up to 60 ms for the game's next sound */
 			pthread_mutex_lock(&ring_lock);
-			unsigned h = ring_w - ring_r;
+			have = ring_w - ring_r;
 			pthread_mutex_unlock(&ring_lock);
-			if (h >= (primed ? PERIOD : PERIOD * 2))
+			if (have >= PERIOD)
 				break;
-			if (!primed) {
-				k = 0;                    /* not started: wait as long as it takes */
-				usleep(4000);
-				if (!snd_running)
-					return NULL;
-				continue;
-			}
-			usleep(2000);
+			usleep(1000);
 		}
-		primed = true;
 		pthread_mutex_lock(&ring_lock);
-		unsigned have = ring_w - ring_r;
-		if (have < PERIOD) {
-			gaps++;
-			primed = false;               /* a cushion again before the next */
-		}
-		if (have > PERIOD * 6)                /* too far behind (a menu was open): the oldest go */
-			ring_r = ring_w - PERIOD * 2, have = PERIOD * 2;
+		have = ring_w - ring_r;
+		if (have < PERIOD)
+			gaps++;                               /* none for 60 ms: what there is, then fading */
 		for (unsigned i = 0; i < PERIOD; i++) {
 			int16_t v;
 			if (i < have) {
 				v = ring[(ring_r + i) % RING];
 				last = v;
-			} else {                      /* nothing yet: fading to silence, no click */
+			} else {
 				last = (int16_t)(last * 15 / 16);
 				v = last;
 			}
@@ -1889,11 +1892,22 @@ static void *snd_thread(void *arg)
 				logmsg("sound: write: %s", pcm_get_error(pcm));
 			pcm_prepare(pcm);
 			usleep(5000);
-		} else if (snd_writes++ == 0) {
-			logmsg("sound: the first %d frames played", PERIOD);
+		} else {
+			if (snd_writes++ == 0)
+				logmsg("sound: the first %d frames played", PERIOD);
+			snd_frames += PERIOD;
 		}
 	}
 	return NULL;
+}
+
+/* How much sound is waiting for the card */
+static unsigned ring_level(void)
+{
+	pthread_mutex_lock(&ring_lock);
+	unsigned h = ring_w - ring_r;
+	pthread_mutex_unlock(&ring_lock);
+	return h;
 }
 
 static void set_mixer(void)
@@ -3601,7 +3615,7 @@ static void sound_menu(bool overlay)
 }
 
 /* What the in-game menu can do */
-enum { M_RESUME, M_SAVE, M_LOAD, M_RESET, M_HELP, M_SOUND, M_PAD, M_PAIR, M_LIST, M_REBOOT, M_OFF, M_N };
+enum { M_RESUME, M_SAVE, M_LOAD, M_RESET, M_HELP, M_SOUND, M_PAD, M_PAIR, M_LIST, M_OFF, M_N };
 
 static bool state_exists(int slot)
 {
@@ -3619,7 +3633,7 @@ static int game_menu(void)
 		T("Reset gry", "Reset the game"), T("Sterowanie", "Controls"), T("Dźwięk radia", "Radio sound"),
 		T("Przyciski pada", "Pad buttons"),
 		T("Bluetooth", "Bluetooth"), T("Lista gier", "Game list"),
-		T("Restart do menu startowego", "Restart to the boot menu"), T("Wyłącz radio", "Switch the radio off"),
+		T("Wyłącz radio (start: wybór systemu)", "Radio off (on again: choose a system)"),
 	};
 	int c = menu(cur_base, items, M_N, 0, T("F2 / A: wybierz  GEN: wróć do gry", "F2 / A: choose  GEN: back to the game"), true);
 	return c < 0 ? M_RESUME : c;
@@ -3760,7 +3774,6 @@ static void play(int idx)
 			case M_PAD: learn_pad(); break;
 			case M_PAIR: bt_menu(); break;
 			case M_LIST: save_state(9); done = true; break;
-			case M_REBOOT: leave(RB_AUTOBOOT); break;
 			case M_OFF: leave(RB_POWER_OFF); break;
 			}
 			memset(canvas, 0, sizeof canvas);
@@ -3777,7 +3790,7 @@ static void play(int idx)
 		struct timespec nowts;
 		clock_gettime(CLOCK_MONOTONIC, &nowts);
 		long late_us = (nowts.tv_sec - next.tv_sec) * 1000000L + (nowts.tv_nsec - next.tv_nsec) / 1000;
-		if (late_us > 8000 && skipped < 3) {
+		if (!snd_running && late_us > 8000 && skipped < 3) {
 			skipped++;                        /* behind: this picture skipped, the next one shown */
 			skips++;
 		} else {
@@ -3797,7 +3810,11 @@ static void play(int idx)
 		}
 		sound_flush();
 		frames++;
-		{                                 /* the game's time: the clock */
+		if (snd_running) {                /* the game's time: the card's. On while the ring is low */
+			for (int k = 0; k < 100 && ring_level() > PERIOD * 3; k++)
+				usleep(1000);
+			clock_gettime(CLOCK_MONOTONIC, &next);
+		} else {                          /* no sound: the clock */
 			long step = (long)(1e9 / fps);
 			next.tv_nsec += step;
 			while (next.tv_nsec >= 1000000000L) {
@@ -3817,10 +3834,15 @@ static void play(int idx)
 			save_sram();
 		}
 		if (t - fps_t >= 10000) {
-			logmsg("%.1f frames/s (core %.1f ms, picture %.1f ms a frame, %u pictures skipped), sound: %u periods, "
-			       "%u short, %u card errors", (frames - fps_frames) * 1000.0 / (t - fps_t),
-			       core_us / 1000.0 / (frames - fps_frames + 1), draw_us / 1000.0 / (frames - fps_frames + 1), skips,
-			       snd_writes, gaps, xruns);
+			static uint64_t f0, u0;
+			uint64_t f1 = snd_frames, u1 = now_us();
+			double card_hz = u0 && u1 > u0 ? (double)(f1 - f0) * 1e6 / (double)(u1 - u0) : 0;
+			f0 = f1;
+			u0 = u1;
+			logmsg("%.1f frames/s (core %.1f ms, picture %.1f ms a frame, %u pictures skipped), sound: the card "
+			       "takes %.0f Hz, %u periods, %u short, %u card errors, %u waiting",
+			       (frames - fps_frames) * 1000.0 / (t - fps_t), core_us / 1000.0 / (frames - fps_frames + 1),
+			       draw_us / 1000.0 / (frames - fps_frames + 1), skips, card_hz, snd_writes, gaps, xruns, ring_level());
 			core_us = draw_us = 0;
 			skips = 0;
 			fps_t = t;
@@ -3892,15 +3914,13 @@ static void game_side(int sel, int x, int y, int w, int h)
 		static const char *pl[] = {"Pady, klawiatury i myszy: szukanie, parowanie, lista sparowanych.",
 		                           "Własny układ przycisków pada, naciskany po kolei.",
 		                           "Ustawienia toru dźwięku radia, słychać je od razu na melodii.",
-		                           "Z powrotem do menu wyboru systemu przy starcie radia.",
-		                           "Radio wyłącza się całkiem."};
+		                           "Radio wyłącza się całkiem. Po włączeniu: menu wyboru systemu."};
 		static const char *en[] = {"Pads, keyboards and mice: looking, pairing, the paired list.",
 		                           "Your own pad layout, pressed in turn.",
 		                           "The radio's sound path, heard at once on a tune.",
-		                           "Back to the radio's boot menu, to choose a system.",
-		                           "The radio switches off."};
+		                           "The radio switches off. On again: the menu to choose a system."};
 		int k = sel - (list_games ? list_games : 1);
-		if (k >= 0 && k < 5)
+		if (k >= 0 && k < 4)
 			draw_wrapped(x + 18, ty, F_BODY, C_DIM, set_en ? en[k] : pl[k], w - 36, 26, 8);
 		else
 			draw_wrapped(x + 18, ty, F_BODY, C_DIM,
@@ -3929,10 +3949,10 @@ static void game_list(void)
 				if (!strcmp(game_path(i), last))
 					sel = i;
 		}
-		enum { X_PAIR, X_PAD, X_SOUND, X_REBOOT, X_OFF, X_N };
+		enum { X_PAIR, X_PAD, X_SOUND, X_OFF, X_N };
 		const char *extra[X_N] = {
 			"› Bluetooth", T("› Przyciski pada", "› Pad buttons"), T("› Dźwięk radia", "› Radio sound"),
-			T("› Restart do menu startowego", "› Restart to the boot menu"), T("› Wyłącz radio", "› Switch the radio off"),
+			T("› Wyłącz radio", "› Switch the radio off"),
 		};
 		static const char *items[MAX_GAMES + X_N + 1];
 		int n = 0;
@@ -3970,7 +3990,6 @@ static void game_list(void)
 		case X_PAIR: bt_menu(); break;
 		case X_PAD: learn_pad(); break;
 		case X_SOUND: sound_menu(false); break;
-		case X_REBOOT: leave(RB_AUTOBOOT); break;
 		case X_OFF: leave(RB_POWER_OFF); break;
 		}
 	}
