@@ -241,6 +241,101 @@ static void radio_audio(void)
 	close(fd);
 }
 
+/* The game's sound reaches the speaker through the radio's receive path (squelch and RF gain cut
+ * it, as Doom found), so that path's settings shape it too: the mode and its filter, the AGC, the
+ * noise reduction. Registers as X6100Control (LGPL-2.1) numbers them: 4 VFO A mode, 5 its AGC,
+ * 14 AF volume, 15 RF gain | TX power << 8, 21 mic/PTT/charger/speaker mode/squelch, 23 NR/NB,
+ * 24 DNF, 44..47 the two filters' edges. Each has "unchanged" first: as the last system left it */
+enum { SO_MODE, SO_AGC, SO_FILTER, SO_NOISE, SO_SQL, SO_RFG, SO_HP, SO_VOL, SO_AF, SO_N };
+struct sound_opt {
+	const char *key, *pl, *en;
+	int n;
+	const char *names[5];
+	int vals[5];
+};
+static const struct sound_opt sound_opts[SO_N] = {
+	{"mode", "Tryb odbiornika", "Receiver mode", 4, {"-", "USB", "AM", "NFM"}, {-1, 2, 6, 7}},
+	{"agc", "AGC", "AGC", 5, {"-", "OFF", "SLOW", "FAST", "AUTO"}, {-1, 0, 1, 2, 3}},
+	{"filter", "Filtr pasma", "Filter", 4, {"-", "3 kHz", "5 kHz", "8 kHz"}, {-1, 2950, 5000, 8000}},
+	{"noise", "NR / NB / DNF", "NR / NB / DNF", 2, {"-", "OFF"}, {-1, 0}},
+	{"squelch", "Squelch, tryb głośnika", "Squelch, speaker mode", 3, {"-", "0 / 0", "0 / 1"}, {-1, 0, 1}},
+	{"rfgain", "RF gain", "RF gain", 5, {"-", "0", "30", "64", "100"}, {-1, 0, 30, 64, 100}},
+	{"headphone", "Wyjście procesora", "The SoC's output", 3, {"47", "55", "63"}, {47, 55, 63}},
+	{"volume", "Głośność gry", "Game volume", 4, {"50 %", "75 %", "100 %", "150 %"}, {50, 75, 100, 150}},
+	{"af", "Głośnik radia (AF)", "Radio speaker (AF)", 4, {"10", "20", "30", "45"}, {10, 20, 30, 45}},
+};
+static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 0, 2, 1};
+static void set_mixer(void);
+
+static void sound_apply(void)
+{
+	int fd = open("/dev/i2c-0", O_RDWR);
+	const int *v = sound_sel;
+	set_headphone = sound_opts[SO_HP].vals[v[SO_HP]];
+	set_volume = sound_opts[SO_VOL].vals[v[SO_VOL]];
+	set_rxvol = sound_opts[SO_AF].vals[v[SO_AF]];
+	if (fd >= 0) {
+		bool ok = base_write(fd, 14, (uint32_t)set_rxvol);
+		if (v[SO_MODE]) ok &= base_write(fd, 4, (uint32_t)sound_opts[SO_MODE].vals[v[SO_MODE]]);
+		if (v[SO_AGC]) ok &= base_write(fd, 5, (uint32_t)sound_opts[SO_AGC].vals[v[SO_AGC]]);
+		if (v[SO_FILTER]) {
+			uint32_t hi = (uint32_t)sound_opts[SO_FILTER].vals[v[SO_FILTER]];
+			ok &= base_write(fd, 44, 50) && base_write(fd, 45, hi) && base_write(fd, 46, 50) && base_write(fd, 47, hi);
+		}
+		if (v[SO_NOISE]) ok &= base_write(fd, 23, 0) && base_write(fd, 24, 0);
+		if (v[SO_SQL])   /* the charger left on; the built-in mic, PTT mode 0, squelch 0 */
+			ok &= base_write(fd, 21, (1u << 4) | ((uint32_t)sound_opts[SO_SQL].vals[v[SO_SQL]] << 5));
+		if (v[SO_RFG]) ok &= base_write(fd, 15, (uint32_t)sound_opts[SO_RFG].vals[v[SO_RFG]] | (10u << 8));
+		close(fd);
+		logmsg("sound path: mode %s, AGC %s, filter %s, noise %s, squelch %s, RF %s, AF %d: %s",
+		       sound_opts[SO_MODE].names[v[SO_MODE]], sound_opts[SO_AGC].names[v[SO_AGC]],
+		       sound_opts[SO_FILTER].names[v[SO_FILTER]], sound_opts[SO_NOISE].names[v[SO_NOISE]],
+		       sound_opts[SO_SQL].names[v[SO_SQL]], sound_opts[SO_RFG].names[v[SO_RFG]], set_rxvol,
+		       ok ? "set" : "NOT all set");
+	}
+	set_mixer();
+}
+
+static void sound_load(void)
+{
+	char path[320], line[256];
+	snprintf(path, sizeof path, "%s/sound.txt", roms_dir);
+	FILE *f = fopen(path, "r");
+	while (f && fgets(line, sizeof line, f))
+		for (int i = 0; i < SO_N; i++) {
+			size_t k = strlen(sound_opts[i].key);
+			if (!strncmp(line, sound_opts[i].key, k) && line[k] == '=') {
+				int v = atoi(line + k + 1);
+				if (v >= 0 && v < sound_opts[i].n)
+					sound_sel[i] = v;
+			}
+		}
+	if (f)
+		fclose(f);
+	else {                                   /* the settings of nes.txt as they were */
+		for (int k = 0; k < sound_opts[SO_HP].n; k++) if (sound_opts[SO_HP].vals[k] == set_headphone) sound_sel[SO_HP] = k;
+		for (int k = 0; k < sound_opts[SO_AF].n; k++) if (sound_opts[SO_AF].vals[k] == set_rxvol) sound_sel[SO_AF] = k;
+		for (int k = 0; k < sound_opts[SO_VOL].n; k++) if (sound_opts[SO_VOL].vals[k] == set_volume) sound_sel[SO_VOL] = k;
+	}
+}
+
+static void flush_disks(void);
+
+static bool sound_save(void)
+{
+	char path[320];
+	snprintf(path, sizeof path, "%s/sound.txt", roms_dir);
+	FILE *f = fopen(path, "w");
+	if (!f)
+		return false;
+	fprintf(f, "# The game's sound on the radio (the emulator's Sound menu): each value is the place in its list\n");
+	for (int i = 0; i < SO_N; i++)
+		fprintf(f, "%s=%d\n", sound_opts[i].key, sound_sel[i]);
+	fclose(f);
+	flush_disks();
+	return true;
+}
+
 /* ------------------------------------------------------------------------------------------ */
 /* Leaving: back to the boot menu, or off                                                    */
 /* ------------------------------------------------------------------------------------------ */
@@ -692,6 +787,9 @@ struct dev {
 	int32_t amin[ABS_MAX + 1], amax[ABS_MAX + 1];
 	struct padmap map;
 	uint32_t held;                     /* libretro bits */
+	bool joyclass;                     /* buttons from BTN_TRIGGER on (cheap USB pads), not BTN_SOUTH */
+	uint32_t sel_since;                /* Select held since */
+	const char *profile;               /* the layout taken by default: "Xbox", "PlayStation"... */
 };
 
 static struct dev devs[MAX_DEVS];
@@ -814,25 +912,96 @@ static void bind_axis(struct padmap *m, int slot, unsigned code, int sign)
 }
 
 /* Most HID pads: the d-pad as a hat or the left stick, A on the right of the face buttons */
+/* The d-pad and the left stick, on any pad: added to a layout (a learnt one too) where their
+ * codes are not used for something else */
+static bool map_uses(const struct padmap *m, int kind, unsigned code)
+{
+	for (int sl = 0; sl < SLOTS; sl++)
+		for (int i = 0; i < ALTS; i++)
+			if (m->b[sl][i].kind == kind && m->b[sl][i].code == code)
+				return true;
+	return false;
+}
+
+static void add_directions(struct padmap *m)
+{
+	static const struct { int slot; unsigned code; int sign; } ax[] = {
+		{J_UP, ABS_HAT0Y, -1}, {J_DOWN, ABS_HAT0Y, 1}, {J_LEFT, ABS_HAT0X, -1}, {J_RIGHT, ABS_HAT0X, 1},
+		{J_UP, ABS_Y, -1}, {J_DOWN, ABS_Y, 1}, {J_LEFT, ABS_X, -1}, {J_RIGHT, ABS_X, 1},
+	};
+	for (size_t i = 0; i < sizeof ax / sizeof ax[0]; i++) {
+		bool other = false;                   /* that axis learnt as something else */
+		for (int sl = 0; sl < SLOTS; sl++)
+			if (sl != J_UP && sl != J_DOWN && sl != J_LEFT && sl != J_RIGHT)
+				for (int k = 0; k < ALTS; k++)
+					if (m->b[sl][k].kind == 2 && m->b[sl][k].code == ax[i].code)
+						other = true;
+		bool have = false;
+		for (int k = 0; k < ALTS; k++)
+			if (m->b[ax[i].slot][k].kind == 2 && m->b[ax[i].slot][k].code == ax[i].code &&
+			    m->b[ax[i].slot][k].sign == ax[i].sign)
+				have = true;
+		if (!other && !have)
+			bind_axis(m, ax[i].slot, ax[i].code, ax[i].sign);
+	}
+	static const struct { int slot; unsigned code; } keys[] = {
+		{J_UP, BTN_DPAD_UP}, {J_DOWN, BTN_DPAD_DOWN}, {J_LEFT, BTN_DPAD_LEFT}, {J_RIGHT, BTN_DPAD_RIGHT},
+	};
+	for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
+		if (!map_uses(m, 1, keys[i].code))
+			bind_key(m, keys[i].slot, keys[i].code);
+	if (!map_uses(m, 1, BTN_MODE))
+		bind_key(m, J_MENU, BTN_MODE);
+}
+
+static bool name_has(const char *name, const char *const *words)
+{
+	for (; *words; words++)
+		if (strcasestr(name, *words))
+			return true;
+	return false;
+}
+
+/* The layout a pad gets before any learning: by what it calls itself (its kernel's HID numbering:
+ * buttons 1, 2, 3... as BTN_SOUTH, BTN_EAST, BTN_C...; on cheap USB pads from BTN_TRIGGER on).
+ * NES A is the right face button, B the one to the left of it or below it */
 static void default_map(struct dev *d)
 {
+	static const char *xbox[] = {"xbox", "x-box", "microsoft", NULL};
+	static const char *ps[] = {"wireless controller", "dualsense", "dualshock", "sony", "playstation", "ps4", "ps5", NULL};
+	static const char *nin[] = {"pro controller", "joy-con", "nintendo", "switch", NULL};
 	struct padmap *m = &d->map;
 	memset(m, 0, sizeof *m);
-	bind_axis(m, J_UP, ABS_HAT0Y, -1);    bind_axis(m, J_UP, ABS_Y, -1);
-	bind_axis(m, J_DOWN, ABS_HAT0Y, 1);   bind_axis(m, J_DOWN, ABS_Y, 1);
-	bind_axis(m, J_LEFT, ABS_HAT0X, -1);  bind_axis(m, J_LEFT, ABS_X, -1);
-	bind_axis(m, J_RIGHT, ABS_HAT0X, 1);  bind_axis(m, J_RIGHT, ABS_X, 1);
-	bind_key(m, J_UP, BTN_DPAD_UP);       bind_key(m, J_DOWN, BTN_DPAD_DOWN);
-	bind_key(m, J_LEFT, BTN_DPAD_LEFT);   bind_key(m, J_RIGHT, BTN_DPAD_RIGHT);
-	bind_key(m, J_A, BTN_EAST);           bind_key(m, J_A, BTN_THUMB);      /* BTN_B; a joystick's 2nd */
-	bind_key(m, J_A, BTN_C);              /* PS4 / Switch pads without their own driver: the right one */
-	bind_key(m, J_B, BTN_SOUTH);          bind_key(m, J_B, BTN_TRIGGER);    /* BTN_A; a joystick's 1st */
-	bind_key(m, J_X, BTN_NORTH);          bind_key(m, J_X, BTN_THUMB2);
-	bind_key(m, J_Y, BTN_WEST);           bind_key(m, J_Y, BTN_TOP);
-	bind_key(m, J_SELECT, BTN_SELECT);    bind_key(m, J_SELECT, BTN_BASE3);
-	bind_key(m, J_START, BTN_START);      bind_key(m, J_START, BTN_BASE4);
-	bind_key(m, J_SELECT, BTN_TL2);       bind_key(m, J_START, BTN_TR2);   /* Share/Options, -/+ as buttons 9, 10 */
-	bind_key(m, J_MENU, BTN_MODE);
+	if (name_has(d->name, xbox)) {           /* A B _ X Y _ LB RB _ _ View Menu Xbox */
+		d->profile = "Xbox";
+		bind_key(m, J_A, BTN_EAST);  bind_key(m, J_B, BTN_SOUTH);
+		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_WEST);
+		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
+	} else if (name_has(d->name, ps)) {      /* Square Cross Circle Triangle L1 R1 L2 R2 Share Options L3 R3 PS */
+		d->profile = "PlayStation";
+		bind_key(m, J_A, BTN_C);     bind_key(m, J_B, BTN_EAST);      /* Circle, Cross */
+		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_SOUTH);     /* Triangle, Square: turbo */
+		bind_key(m, J_SELECT, BTN_TL2); bind_key(m, J_START, BTN_TR2);
+		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
+	} else if (name_has(d->name, nin)) {     /* B A Y X L R ZL ZR - + LS RS Home (8BitDo in Switch mode too) */
+		d->profile = "Nintendo";
+		bind_key(m, J_A, BTN_EAST);  bind_key(m, J_B, BTN_SOUTH);
+		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_C);
+		bind_key(m, J_SELECT, BTN_TL2); bind_key(m, J_START, BTN_TR2);
+		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
+	} else if (d->joyclass) {                /* cheap USB pads: X A B Y L R _ _ Select Start */
+		d->profile = "USB";
+		bind_key(m, J_A, BTN_THUMB);   bind_key(m, J_B, BTN_THUMB2);
+		bind_key(m, J_X, BTN_TRIGGER); bind_key(m, J_Y, BTN_TOP);
+		bind_key(m, J_SELECT, BTN_BASE3); bind_key(m, J_START, BTN_BASE4);
+	} else {                                  /* 8BitDo and the like (D-input), Android-mode pads */
+		d->profile = T("ogólny", "generic");
+		bind_key(m, J_A, BTN_EAST);  bind_key(m, J_B, BTN_SOUTH);
+		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_WEST);
+		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
+		bind_key(m, J_A, BTN_C);
+	}
+	add_directions(m);
 }
 
 /* NES/pads.txt: one line per pad, its name, a tab, then SLOT=K<code> or SLOT=A<code>+ / - */
@@ -871,9 +1040,10 @@ static bool load_map(struct dev *d)
 					bind_axis(&m, s, (unsigned)code, strchr(eq + 2, '-') ? -1 : 1);
 			}
 		}
-		/* the menu: the guide button, whatever the layout */
-		bind_key(&m, J_MENU, BTN_MODE);
+		/* the d-pad and the stick, and the guide button, whatever was learnt */
+		add_directions(&m);
 		d->map = m;
+		d->profile = T("własny", "own");
 		found = true;
 	}
 	if (f)
@@ -943,6 +1113,23 @@ static uint32_t pad_bits(const struct dev *d)
 	/* Select and Start together: the menu, on pads without a guide button */
 	if ((bits & BIT(J_SELECT)) && (bits & BIT(J_START)))
 		bits = (bits & ~(BIT(J_SELECT) | BIT(J_START))) | BIT(J_MENU);
+	return bits;
+}
+
+/* Select held two seconds: the menu as well (for pads whose Home does nothing here) */
+static uint32_t hold_select(struct dev *d, uint32_t bits)
+{
+	if (!(bits & BIT(J_SELECT))) {
+		d->sel_since = 0;
+		return bits;
+	}
+	uint32_t t = now_ms();
+	if (!d->sel_since)
+		d->sel_since = t;
+	if (t - d->sel_since >= 2000) {
+		d->sel_since = t + 600000;        /* once per hold */
+		return (bits & ~BIT(J_SELECT)) | BIT(J_MENU);
+	}
 	return bits;
 }
 
@@ -1070,6 +1257,10 @@ static void open_inputs(void)
 				*c = ' ';
 		v->role = classify(fd);
 		if (v->role == ROLE_PAD) {
+			unsigned char kb[KEY_MAX / 8 + 1];
+			memset(kb, 0, sizeof kb);
+			ioctl(fd, EVIOCGBIT(EV_KEY, sizeof kb), kb);
+			v->joyclass = TEST_BIT(kb, BTN_TRIGGER) && !TEST_BIT(kb, BTN_SOUTH);
 			unsigned char abs[ABS_MAX / 8 + 1];
 			memset(abs, 0, sizeof abs);
 			ioctl(fd, EVIOCGBIT(EV_ABS, sizeof abs), abs);
@@ -1086,19 +1277,18 @@ static void open_inputs(void)
 			if (!known)
 				default_map(v);
 			v->port = free_port();
-			if (known)
-				note(T("Pad gracza %d: %.50s", "Player %d pad: %.50s"), v->port + 1, v->name);
-			else
-				note(T("Pad gracza %d. Inny układ? Menu > Przyciski pada", "Player %d pad. Other layout? Menu > Pad buttons"),
-				     v->port + 1);
+			note(T("Pad gracza %d (układ: %s). Inny? Menu > Przyciski pada", "Player %d pad (%s layout). Other? Menu > Pad buttons"),
+			     v->port + 1, v->profile);
+			(void)known;
 		} else if (v->role == ROLE_KEYBOARD) {
 			note(T("Klawiatura: %.60s", "Keyboard: %.60s"), v->name);
 		} else if (v->role == ROLE_MOUSE) {
 			note(T("Mysz: %.60s", "Mouse: %.60s"), v->name);
 		}
 		static const char *roles[] = {"radio", "mouse", "keyboard", "pad"};
-		logmsg("input %s: \"%s\" -> %s%s", e->d_name, v->name, roles[v->role],
-		       v->role == ROLE_PAD ? (v->port ? " (player 2)" : " (player 1)") : "");
+		logmsg("input %s: \"%s\" -> %s%s%s", e->d_name, v->name, roles[v->role],
+		       v->role == ROLE_PAD ? (v->port ? " (player 2), layout " : " (player 1), layout ") : "",
+		       v->role == ROLE_PAD ? v->profile : "");
 		pfd[n_devs].fd = fd;
 		pfd[n_devs].events = POLLIN;
 		n_devs++;
@@ -1241,7 +1431,7 @@ static void poll_input(void)
 	uint32_t p[2] = {radio_bits | kb_bits | knob_bits, 0};
 	for (int i = 0; i < n_devs; i++)
 		if (devs[i].role == ROLE_PAD && devs[i].port >= 0) {
-			devs[i].held = learn_dev == -1 ? pad_bits(&devs[i]) : 0;
+			devs[i].held = learn_dev == -1 ? hold_select(&devs[i], pad_bits(&devs[i])) : 0;
 			p[devs[i].port] |= devs[i].held;
 		}
 	frame_bits[0] = p[0] & 0xfff;
@@ -1464,6 +1654,7 @@ static int list_step(struct list_view *v, bool *dirty)
 }
 
 static bool keys_scripted(void);
+static void (*menu_tick)(void);            /* called while a menu waits (the Sound menu's tune) */
 
 /* The chosen line, if its name is longer than its room: redrawn now and then, so it moves */
 static void move_long(const struct list_view *v, uint32_t *last)
@@ -1516,6 +1707,8 @@ static int menu_ex(const char *title, const char *const *items, int n, int sel, 
 		}
 		if (test_mode && !keys_scripted())
 			return v.sel;
+		if (menu_tick)
+			menu_tick();
 		idle(10);
 	}
 }
@@ -3276,8 +3469,9 @@ static void learn_pad(void)
 	}
 	learn_dev = -1;
 	if (dev >= 0 && dev < n_devs) {
-		bind_key(&m, J_MENU, BTN_MODE);
+		add_directions(&m);
 		devs[dev].map = m;
+		devs[dev].profile = T("własny", "own");
 		save_map(&devs[dev]);
 		logmsg("pad \"%s\": buttons set", devs[dev].name);
 		const char *l[] = {devs[dev].name, T("Zapisane w NES/pads.txt.", "Saved in NES/pads.txt.")};
@@ -3286,8 +3480,92 @@ static void learn_pad(void)
 	input_settle();
 }
 
+/* A tune for the Sound menu, our own: a square-wave arpeggio over a triangle bass, a noise tick on
+ * each beat, as an NES game sounds; made as it plays, into the sound's ring */
+static uint64_t tune_start, tune_done;
+static uint32_t tune_lfsr = 1;
+
+static int16_t tune_sample(uint64_t n)
+{
+	static const int notes[16] = {523, 659, 784, 1047, 784, 659, 587, 494, 440, 554, 659, 880, 740, 659, 554, 494};
+	unsigned step = snd_rate * 160 / 1000;                    /* 160 ms a note */
+	unsigned k = (unsigned)(n / step) % 16, in = (unsigned)(n % step);
+	double t = (double)n / snd_rate;
+	int32_t v = 0;
+	double ph = t * notes[k] - (double)(long)(t * notes[k]);
+	v += ph < 0.25 ? 5000 : -5000;                            /* square, 25 % duty */
+	double pb = t * notes[k & 12] / 4 - (double)(long)(t * notes[k & 12] / 4);
+	v += (int32_t)((pb < 0.5 ? pb * 4 - 1 : 3 - pb * 4) * 4000);   /* triangle bass */
+	if ((k & 3) == 0 && in < snd_rate / 40) {                  /* a noise tick, 25 ms */
+		tune_lfsr = (tune_lfsr >> 1) ^ (-(tune_lfsr & 1u) & 0xB400u);
+		v += (tune_lfsr & 1) ? 2500 : -2500;
+	}
+	if (in > step - snd_rate / 100)                            /* a gap between the notes */
+		v /= 4;
+	return soft_limit(v * 3 * set_volume / 100);
+}
+
+static void tune_tick(void)
+{
+	if (!snd_running)
+		return;
+	uint64_t want = (now_us() - tune_start) * snd_rate / 1000000 + 2048;
+	pthread_mutex_lock(&ring_lock);
+	for (; tune_done < want; tune_done++) {
+		if (ring_w - ring_r >= RING)
+			ring_r++;
+		ring[ring_w++ % RING] = tune_sample(tune_done);
+	}
+	pthread_mutex_unlock(&ring_lock);
+}
+
+/* The radio's sound path, tried live: each choice changes one setting at once, the tune plays on */
+static void game_to_canvas(void);
+
+static void sound_menu(bool overlay)
+{
+	tune_start = now_us();
+	tune_done = 0;
+	pthread_mutex_lock(&ring_lock);
+	ring_r = ring_w;
+	pthread_mutex_unlock(&ring_lock);
+	menu_tick = tune_tick;
+	int sel = 0;
+	for (;;) {
+		char labels[SO_N][96];
+		const char *items[SO_N + 2];
+		for (int i = 0; i < SO_N; i++) {
+			const char *v = sound_opts[i].names[sound_sel[i]];
+			snprintf(labels[i], sizeof labels[i], "%s:  %s", set_en ? sound_opts[i].en : sound_opts[i].pl,
+			         !strcmp(v, "-") ? T("bez zmian", "unchanged") : v);
+			items[i] = labels[i];
+		}
+		items[SO_N] = T("Zapisz jako domyślne", "Save as the default");
+		items[SO_N + 1] = T("Wróć", "Back");
+		if (overlay)
+			game_to_canvas();
+		int c = menu(T("Dźwięk radia", "Radio sound"), items, SO_N + 2, sel,
+		             T("F2 / A: zmień  F1 / B: wróć", "F2 / A: change  F1 / B: back"), overlay);
+		if (c < 0 || c == SO_N + 1)
+			break;
+		sel = c;
+		if (c == SO_N) {
+			const char *l[] = {sound_save() ? T("Zapisane w NES/sound.txt.", "Saved in NES/sound.txt.")
+			                                : T("Nie udało się zapisać.", "Could not save.")};
+			message(T("Dźwięk radia", "Radio sound"), l, 1, 1500);
+		} else {
+			sound_sel[c] = (sound_sel[c] + 1) % sound_opts[c].n;
+			sound_apply();
+		}
+	}
+	menu_tick = NULL;
+	pthread_mutex_lock(&ring_lock);
+	ring_r = ring_w;
+	pthread_mutex_unlock(&ring_lock);
+}
+
 /* What the in-game menu can do */
-enum { M_RESUME, M_SAVE, M_LOAD, M_RESET, M_HELP, M_PAD, M_PAIR, M_LIST, M_REBOOT, M_OFF, M_N };
+enum { M_RESUME, M_SAVE, M_LOAD, M_RESET, M_HELP, M_SOUND, M_PAD, M_PAIR, M_LIST, M_REBOOT, M_OFF, M_N };
 
 static bool state_exists(int slot)
 {
@@ -3302,7 +3580,8 @@ static int game_menu(void)
 	const char *items[M_N] = {
 		T("Wróć do gry", "Back to the game"), T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
-		T("Reset gry", "Reset the game"), T("Sterowanie", "Controls"), T("Przyciski pada", "Pad buttons"),
+		T("Reset gry", "Reset the game"), T("Sterowanie", "Controls"), T("Dźwięk radia", "Radio sound"),
+		T("Przyciski pada", "Pad buttons"),
 		T("Bluetooth", "Bluetooth"), T("Lista gier", "Game list"),
 		T("Restart do menu startowego", "Restart to the boot menu"), T("Wyłącz radio", "Switch the radio off"),
 	};
@@ -3439,6 +3718,7 @@ static void play(int idx)
 			case M_LOAD: msg = load_state(0) ? T("Stan wczytany", "State loaded") : T("Brak zapisu", "No saved state"); break;
 			case M_RESET: retro_reset(); break;
 			case M_HELP: help(); break;
+			case M_SOUND: sound_menu(true); break;
 			case M_PAD: learn_pad(); break;
 			case M_PAIR: bt_menu(); break;
 			case M_LIST: save_state(9); done = true; break;
@@ -3562,14 +3842,16 @@ static void game_side(int sel, int x, int y, int w, int h)
 	} else {
 		static const char *pl[] = {"Pady, klawiatury i myszy: szukanie, parowanie, lista sparowanych.",
 		                           "Własny układ przycisków pada, naciskany po kolei.",
+		                           "Ustawienia toru dźwięku radia, słychać je od razu na melodii.",
 		                           "Z powrotem do menu wyboru systemu przy starcie radia.",
 		                           "Radio wyłącza się całkiem."};
 		static const char *en[] = {"Pads, keyboards and mice: looking, pairing, the paired list.",
 		                           "Your own pad layout, pressed in turn.",
+		                           "The radio's sound path, heard at once on a tune.",
 		                           "Back to the radio's boot menu, to choose a system.",
 		                           "The radio switches off."};
 		int k = sel - (list_games ? list_games : 1);
-		if (k >= 0 && k < 4)
+		if (k >= 0 && k < 5)
 			draw_wrapped(x + 18, ty, F_BODY, C_DIM, set_en ? en[k] : pl[k], w - 36, 26, 8);
 		else
 			draw_wrapped(x + 18, ty, F_BODY, C_DIM,
@@ -3598,9 +3880,9 @@ static void game_list(void)
 				if (!strcmp(game_path(i), last))
 					sel = i;
 		}
-		enum { X_PAIR, X_PAD, X_REBOOT, X_OFF, X_N };
+		enum { X_PAIR, X_PAD, X_SOUND, X_REBOOT, X_OFF, X_N };
 		const char *extra[X_N] = {
-			"› Bluetooth", T("› Przyciski pada", "› Pad buttons"),
+			"› Bluetooth", T("› Przyciski pada", "› Pad buttons"), T("› Dźwięk radia", "› Radio sound"),
 			T("› Restart do menu startowego", "› Restart to the boot menu"), T("› Wyłącz radio", "› Switch the radio off"),
 		};
 		static const char *items[MAX_GAMES + X_N + 1];
@@ -3638,6 +3920,7 @@ static void game_list(void)
 		switch (c - base) {
 		case X_PAIR: bt_menu(); break;
 		case X_PAD: learn_pad(); break;
+		case X_SOUND: sound_menu(false); break;
 		case X_REBOOT: leave(RB_AUTOBOOT); break;
 		case X_OFF: leave(RB_POWER_OFF); break;
 		}
@@ -3696,6 +3979,8 @@ static void as_init(void)
 	setenv("HOME", "/nes", 1);
 	read_settings();
 	radio_audio();
+	sound_load();
+	sound_apply();
 	if (mount_donor()) {
 		/* pads on USB: the kernel's HID drivers that are modules */
 		wifi_chip_on();

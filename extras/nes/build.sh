@@ -138,11 +138,12 @@ PY
     for f in pad kbd mouse; do mkfifo "$T/in/$f"; done
     (cd "$T" && NES_TEST_LOG="$T/in.log" NES_TEST_FB=480x800 NES_TEST_ROMS="$T/roms" \
         NES_TEST_DEVS="pad:$T/in/pad,kbd:$T/in/kbd,mouse:$T/in/mouse" \
-        NES_TEST_KEYS="$(printf 'w%.0s' $(seq 1 85))" timeout 120 "$W/nes-pc") &
+        NES_TEST_KEYS="$(printf 'w%.0s' $(seq 1 90))" timeout 120 "$W/nes-pc") &
     sleep 1
     python3 "$HERE/test/drive_input.py" "$T/in" > "$T/drive.log"
     wait
     for bits in 00180 00040 00100 00008 10000 00001; do grep -q "test bits p1=$bits" "$T/in.log"; done
+    grep -q "test bits p1=00080" "$T/in.log"    # the hat after learning: the d-pad kept
     grep -q "UP=A17- DOWN=A17+ LEFT=A0- RIGHT=A0+ A=K308" "$T/roms/pads.txt"
     grep -q "B=K307 TB=K318 SELECT=K310 START=K311" "$T/roms/pads.txt"
     echo "PC test input: pad, keyboard, the menu combination, learnt buttons: ok"
