@@ -34,10 +34,58 @@ def _run(cmd, **kw):
 # --------------------------------------------------------------------------------------------
 def list_cards():
     if WIN:
-        return _list_windows()
-    if MAC:
-        return _list_mac()
-    return _list_linux()
+        cards = _list_windows()
+    elif MAC:
+        cards = _list_mac()
+    else:
+        cards = _list_linux()
+    if not cards:
+        _log_disks()
+    return cards
+
+
+_logged = False
+
+
+def _log_disks():
+    """No card found: what the system says about its disks into log.txt (once a run), so that a
+    card the list leaves out can be told why"""
+    global _logged
+    if _logged:
+        return
+    _logged = True
+    lines = []
+    try:
+        if WIN:
+            from . import win32disk
+            lines.append("system disks: %s" % sorted(win32disk.system_disks()))
+            for n in range(16):
+                d = win32disk.describe(n)
+                if d:
+                    d["letters"] = [c for c in win32disk.letters() if n in win32disk._disks_of_volume(c)]
+                    lines.append("PhysicalDrive%d: %r" % (n, d))
+        elif MAC:
+            r = _run(["diskutil", "list", "-plist"])
+            for disk in plistlib.loads(r.stdout).get("WholeDisks", []):
+                info = plistlib.loads(_run(["diskutil", "info", "-plist", disk]).stdout)
+                lines.append("%s: %r" % (disk, {k: info.get(k) for k in (
+                    "MediaName", "TotalSize", "Internal", "VirtualOrPhysical", "BusProtocol", "RemovableMedia",
+                    "Removable", "Ejectable", "DeviceLocation", "WritableMedia")}))
+        else:
+            r = _run(["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,RM,HOTPLUG,TRAN,MODEL,VENDOR,TYPE,MOUNTPOINT,RO"])
+            lines.append(r.stdout.decode(errors="replace"))
+    except Exception as e:
+        lines.append("could not look at the disks: %r" % e)
+    try:
+        import time
+        from .backup import backups_dir
+        path = os.path.join(os.path.dirname(backups_dir()), "log.txt")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + "no SD card found (%s); the disks:\n" % sys.platform)
+            f.write("\n".join(lines) + "\n\n")
+    except OSError:
+        pass
 
 
 def _list_linux():
