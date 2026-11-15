@@ -162,9 +162,11 @@ under = [int(re.search(r"(\d+) underruns", l).group(1)) for l in st[1:]]
 print("PC test pace: %s frames/s, gaps %s, underruns %s" % (fps, short, under))
 assert all(59.5 < f < 60.7 for f in fps), "the game is not at 60 frames/s"
 assert short[-1] == short[0] and under[-1] == 0, "the sound ran dry"
-wait = [int(re.search(r"(\d+) waiting", l).group(1)) for l in st[1:]]
-print("PC test pace: the ring %s (its mark 1536)" % wait)
-assert min(wait[1:]) > 900, "the ring runs low: the card's pace not caught"
+low = [int(re.search(r"held at least (\d+)", l).group(1)) for l in st[1:]]
+dry = [int(re.search(r"(\d+) dry", l).group(1)) for l in st[1:]]
+print("PC test pace: the card held at least %s frames, ran dry %s times" % (low, dry))
+assert dry[-1] == dry[0], "the card ran dry while playing"
+assert min(low[1:]) > 300, "the card nearly dry: no cushion kept"
 PY
     cp "$W/frame.raw" "$OUT/test-frame-480x800-bgrx.raw"
     cp "$W/menu.raw" "$OUT/test-menu-480x800-bgrx.raw"

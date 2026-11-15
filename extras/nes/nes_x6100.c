@@ -1921,6 +1921,44 @@ static volatile uint64_t snd_frames;          /* frames given to the card */
 static uint64_t game_frames;                   /* frames the game made */
 static volatile uint64_t snd_since_us;
 
+/* The card: the real one, or the PC test's pretend one (1 % fast, 2048 frames deep, started
+ * again when it runs dry, as tinyalsa does with the radio's) */
+#define CARD_DEPTH (PERIOD * 4)
+static uint64_t fake_t0, fake_written;
+static unsigned fake_xruns;
+
+static long fake_queued(void)
+{
+	if (!fake_t0)
+		return 0;
+	return (long)fake_written - (long)((now_us() - fake_t0) * 48486 / 1000000);
+}
+
+/* Frames in the card not played yet */
+static long card_delay(void)
+{
+	long d = pcm ? pcm_get_delay(pcm) : fake_queued();
+	return d < 0 ? 0 : d > CARD_DEPTH ? CARD_DEPTH : d;
+}
+
+static int card_write(const int16_t *out)
+{
+	if (pcm)
+		return pcm_writei(pcm, out, PERIOD);
+	if (!fake_t0 || fake_queued() < 0) {          /* ran dry: what waited is gone, on again */
+		if (fake_t0)
+			fake_xruns++;
+		fake_t0 = now_us();
+		fake_written = 0;
+	}
+	while (fake_queued() > CARD_DEPTH - PERIOD)
+		usleep(500);
+	fake_written += PERIOD;
+	return PERIOD;
+}
+
+static volatile unsigned card_low = CARD_DEPTH;  /* the least the card held since the last log line */
+
 static void *snd_thread(void *arg)
 {
 	(void)arg;
@@ -1929,11 +1967,17 @@ static void *snd_thread(void *arg)
 	snd_since_us = now_us();
 	while (snd_running) {
 		unsigned have = 0;
-		for (int k = 0; k < 40; k++) {           /* up to 40 ms for the game's next sound */
+		/* the game's next sound waited for while the card still holds some: never until it is
+		 * dry (it would start again, the sound cut every frame). About to run dry: what there
+		 * is goes in, the rest held, which is the cushion the card then keeps */
+		for (int k = 0; k < 60; k++) {
 			pthread_mutex_lock(&ring_lock);
 			have = ring_w - ring_r;
 			pthread_mutex_unlock(&ring_lock);
-			if (have >= PERIOD)
+			long d = card_delay();
+			if ((unsigned)d < card_low)
+				card_low = (unsigned)d;
+			if (have >= PERIOD || d <= PERIOD)
 				break;
 			usleep(1000);
 		}
@@ -1954,23 +1998,7 @@ static void *snd_thread(void *arg)
 		}
 		ring_r += have < PERIOD ? have : PERIOD;
 		pthread_mutex_unlock(&ring_lock);
-		int r;
-		if (pcm) {
-			r = pcm_writei(pcm, out, PERIOD);
-		} else {                                  /* the PC test's pretend card: 48 kHz of time */
-			static struct timespec due;           /* 1 % fast, as the radio's card */
-			struct timespec nw;
-			clock_gettime(CLOCK_MONOTONIC, &nw);
-			if ((nw.tv_sec - due.tv_sec) * 1000000000L + (nw.tv_nsec - due.tv_nsec) > 20000000L)
-				due = nw;                         /* a card never catches up on time it waited */
-			due.tv_nsec += (long)(PERIOD * 1e9 / 48486.0);
-			while (due.tv_nsec >= 1000000000L) {
-				due.tv_nsec -= 1000000000L;
-				due.tv_sec++;
-			}
-			clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &due, NULL);
-			r = PERIOD;
-		}
+		int r = card_write(out);
 		if (r < 0) {                              /* as on card 39 */
 			if (xruns++ < 5)
 				logmsg("sound: write: %s", pcm_get_error(pcm));
@@ -2114,8 +2142,9 @@ static void sound_flush(void)
 		static int16_t prev;
 		static double pos;                    /* where in this frame's sound the next one is taken */
 		static double drift;
-		unsigned level = ring_level();
-		const double target = PERIOD * 3;
+		/* what waits: in the ring and in the card (the thread moves it there at once) */
+		unsigned level = ring_level() + (unsigned)card_delay();
+		const double target = PERIOD * 3 + 300;   /* just after a frame's 800: 1000 left before the next */
 		double err = (target - (double)level) / target;
 		drift += 0.00005 * err;
 		if (drift < -0.025) drift = -0.025;
@@ -3933,11 +3962,12 @@ static void play(int idx)
 			g0 = g1;
 			u0 = u1;
 			logmsg("%.1f frames/s (core %.1f ms, picture %.1f ms a frame, %u pictures skipped), sound: the game "
-			       "made %.0f Hz, the card took %.0f Hz, %u short, %u underruns, %u waiting, stretch %.4f, volume %d %%",
+			       "made %.0f Hz, the card took %.0f Hz, held at least %u, %u dry, %u short, %u underruns, %u waiting, stretch %.4f, volume %d %%",
 			       (frames - fps_frames) * 1000.0 / (t - fps_t), core_us / 1000.0 / (frames - fps_frames + 1),
-			       draw_us / 1000.0 / (frames - fps_frames + 1), skips, game_hz, card_hz, gaps, xruns, ring_level(), drc_ratio,
+			       draw_us / 1000.0 / (frames - fps_frames + 1), skips, game_hz, card_hz, card_low, fake_xruns, gaps, xruns, ring_level(), drc_ratio,
 			       set_volume);
 			core_us = draw_us = 0;
+			card_low = CARD_DEPTH;
 			skips = 0;
 			fps_t = t;
 			fps_frames = frames;

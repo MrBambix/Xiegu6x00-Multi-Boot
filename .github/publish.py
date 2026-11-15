@@ -42,6 +42,8 @@ def notes(v):
     if TEST:
         return ("**Wersja testowa (pre-release): do sprawdzenia przed wydaniem, nie do zwykłego użytku.**\n\n"
                 "**A test version (pre-release): for checking before the release, not for everyday use.**\n\n"
+                "**Emulator NES to wczesna alfa: mogą być problemy, także z dźwiękiem (przerwy, trzaski).**\n\n"
+                "**The NES emulator is an early alpha: expect problems, with the sound too (gaps, crackle).**\n\n"
                 f"Windows {v['windows']} · macOS {v['macos']} · Linux {v['linux']}\n\n"
                 "Do sprawdzenia: lista w README na gałęzi `test-data`, rozdział „Wersja testowa: co sprawdzić”.\n")
     return f"""Kilka systemów na jednej karcie SD dla Xiegu X6100, z menu na ekranie radia (F1–F5).
