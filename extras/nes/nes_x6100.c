@@ -111,7 +111,7 @@ static uint32_t now_ms(void)
 /* ------------------------------------------------------------------------------------------ */
 /* Settings: /boot/nes.txt                                                                    */
 /* ------------------------------------------------------------------------------------------ */
-static int set_volume = 150, set_rxvol = 20, set_rxmute = 0, set_headphone = 47, set_record = 1;
+static int set_volume = 100, set_rxvol = 20, set_rxmute = 0, set_headphone = 63, set_record = 1;
 static int set_bluetooth = 1, set_aspect = 0, set_en = 0, set_mouse = 100;
 
 /* The user's words, in Polish or English (lang=en in nes.txt; the app writes it) */
@@ -262,36 +262,24 @@ static const struct sound_opt sound_opts[SO_N] = {
 	{"noise", "NR / NB / DNF", "NR / NB / DNF", 2, {"-", "OFF"}, {-1, 0}},
 	{"squelch", "Squelch, tryb głośnika", "Squelch, speaker mode", 3, {"-", "0 / 0", "0 / 1"}, {-1, 0, 1}},
 	{"rfgain", "RF gain", "RF gain", 5, {"-", "0", "30", "64", "100"}, {-1, 0, 30, 64, 100}},
-	{"headphone", "Wyjście procesora", "The SoC's output", 3, {"47", "55", "63"}, {47, 55, 63}},
+	{"headphone", "Wyjście procesora (63: jak OpenX6X00)", "The SoC's output (63: as OpenX6X00)", 3, {"47", "55", "63"}, {47, 55, 63}},
 	{"volume", "Głośność gry", "Game volume", 0, {""}, {0}},           /* raw values: set_volume */
 	{"af", "Głośnik radia (AF)", "Radio speaker (AF)", 0, {""}, {0}},   /* set_rxvol */
 };
-static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+static int sound_sel[SO_N] = {0, 0, 0, 0, 0, 0, 2, 0, 0};   /* the SoC's output 63 */
 static void set_mixer(void);
 
 static void sound_apply(void)
 {
 	int fd = open("/dev/i2c-0", O_RDWR);
-	const int *v = sound_sel;
-	set_headphone = sound_opts[SO_HP].vals[v[SO_HP]];
+	set_headphone = sound_opts[SO_HP].vals[sound_sel[SO_HP]];
 	if (fd >= 0) {
+		/* only the speaker's level: the receive path stays as the system left it, as when
+		 * OpenX6X00 plays a recording (tried otherwise: its AGC off silenced the sound) */
 		bool ok = base_write(fd, 14, (uint32_t)set_rxvol);
-		if (v[SO_MODE]) ok &= base_write(fd, 4, (uint32_t)sound_opts[SO_MODE].vals[v[SO_MODE]]);
-		if (v[SO_AGC]) ok &= base_write(fd, 5, (uint32_t)sound_opts[SO_AGC].vals[v[SO_AGC]]);
-		if (v[SO_FILTER]) {
-			uint32_t hi = (uint32_t)sound_opts[SO_FILTER].vals[v[SO_FILTER]];
-			ok &= base_write(fd, 44, 50) && base_write(fd, 45, hi) && base_write(fd, 46, 50) && base_write(fd, 47, hi);
-		}
-		if (v[SO_NOISE]) ok &= base_write(fd, 23, 0) && base_write(fd, 24, 0);
-		if (v[SO_SQL])   /* the charger left on; the built-in mic, PTT mode 0, squelch 0 */
-			ok &= base_write(fd, 21, (1u << 4) | ((uint32_t)sound_opts[SO_SQL].vals[v[SO_SQL]] << 5));
-		if (v[SO_RFG]) ok &= base_write(fd, 15, (uint32_t)sound_opts[SO_RFG].vals[v[SO_RFG]] | (10u << 8));
 		close(fd);
-		logmsg("sound path: mode %s, AGC %s, filter %s, noise %s, squelch %s, RF %s, AF %d: %s",
-		       sound_opts[SO_MODE].names[v[SO_MODE]], sound_opts[SO_AGC].names[v[SO_AGC]],
-		       sound_opts[SO_FILTER].names[v[SO_FILTER]], sound_opts[SO_NOISE].names[v[SO_NOISE]],
-		       sound_opts[SO_SQL].names[v[SO_SQL]], sound_opts[SO_RFG].names[v[SO_RFG]], set_rxvol,
-		       ok ? "set" : "NOT all set");
+		logmsg("sound: speaker (AF) %d, the SoC's output %d, the game %d %%: %s", set_rxvol, set_headphone,
+		       set_volume, ok ? "set" : "NOT set");
 	}
 	set_mixer();
 }
@@ -314,8 +302,8 @@ static void sound_load(void)
 						set_volume = v;
 					else if (raw && i == SO_AF && v >= 0 && v <= 55)
 						set_rxvol = v;
-				} else if (v >= 0 && v < sound_opts[i].n) {
-					sound_sel[i] = v;
+				} else if (i == SO_HP && v >= 0 && v < sound_opts[i].n) {
+					sound_sel[i] = v;            /* the receive path's (older files): not used */
 				}
 			}
 		}
@@ -1597,12 +1585,12 @@ struct list_view {
 };
 
 #define ROW   44
-#define OROW  36
+#define OROW  34
 
 static void list_geom(const struct list_view *v, int *x, int *y, int *w, int *rows, int *row_h)
 {
 	if (v->overlay) {
-		*x = 150; *y = 64; *w = 500; *row_h = OROW; *rows = 10;
+		*x = 150; *y = 62; *w = 500; *row_h = OROW; *rows = 11;
 	} else {
 		*x = 20; *y = 76; *w = v->side ? 470 : LAND_W - 40; *row_h = ROW; *rows = 8;
 	}
@@ -1651,7 +1639,7 @@ static void draw_list(struct list_view *v)
 			dim(0, 0, LAND_W, LAND_H, 90);
 			present(0, 0, LAND_W, LAND_H);
 		}
-		int px = x - 20, py = 10, pw = w + 40, ph = LAND_H - 20;
+		int px = x - 20, py = 6, pw = w + 40, ph = LAND_H - 12;
 		rrect_a(px + 4, py + 6, pw, ph, 18, 0x000000, 120);    /* its shadow */
 		box(px, py, pw, ph, 18, C_PANEL, C_LINE);
 		rrect(px + 1, py + 1, pw - 2, 46, 17, C_PANEL2);
@@ -2053,12 +2041,13 @@ static size_t cb_audio_batch(const int16_t *data, size_t frames)
 	return frames;
 }
 
-/* The frame's sound into the ring: one speaker, so one channel; louder than the core gives it
- * (its square waves peak near a sixth of the range): x3 at volume=100, the peaks bent, not cut */
+/* The frame's sound into the ring: one speaker, so one channel; x2 at volume=100 (the core's
+ * square waves peak near a third of the range: room left), the peaks bent, not cut. The loudness
+ * comes from the codec's output at its top (63), as OpenX6X00 sets it */
 static void sound_flush(void)
 {
 	for (size_t i = 0; i < abuf_n; i++) {
-		int32_t v = ((int32_t)abuf[2 * i] + abuf[2 * i + 1]) / 2 * 3 * set_volume / 100;
+		int32_t v = ((int32_t)abuf[2 * i] + abuf[2 * i + 1]) / 2 * 2 * set_volume / 100;
 		abuf[2 * i] = abuf[2 * i + 1] = soft_limit(v);
 	}
 	if (test_pcm) {
@@ -3619,7 +3608,7 @@ static int16_t tune_sample(uint64_t n)
 	}
 	if (in > step - snd_rate / 100)                            /* a gap between the notes */
 		v /= 4;
-	return soft_limit(v * 3 * set_volume / 100);
+	return soft_limit(v * 2 * set_volume / 100);
 }
 
 static void tune_tick(void)
@@ -3649,9 +3638,11 @@ static void sound_menu(bool overlay)
 	menu_tick = tune_tick;
 	int sel = 0;
 	for (;;) {
+		static const int shown[] = {SO_VOL, SO_AF, SO_HP};
 		char labels[SO_N][96];
 		const char *items[SO_N + 2];
-		for (int i = 0; i < SO_N; i++) {
+		for (int k = 0; k < 3; k++) {
+			int i = shown[k];
 			const char *name = set_en ? sound_opts[i].en : sound_opts[i].pl;
 			if (i == SO_VOL)
 				snprintf(labels[i], sizeof labels[i], "%s:  %d %%", name, set_volume);
@@ -3661,17 +3652,21 @@ static void sound_menu(bool overlay)
 				const char *v = sound_opts[i].names[sound_sel[i]];
 				snprintf(labels[i], sizeof labels[i], "%s:  %s", name, !strcmp(v, "-") ? T("bez zmian", "unchanged") : v);
 			}
-			items[i] = labels[i];
+			items[k] = labels[i];
 		}
-		items[SO_N] = T("Zapisz jako domyślne", "Save as the default");
-		items[SO_N + 1] = T("Wróć", "Back");
+		items[3] = T("Zapisz jako domyślne", "Save as the default");
+		items[4] = T("Wróć", "Back");
 		if (overlay)
 			game_to_canvas();
-		int c = menu(T("Dźwięk radia", "Radio sound"), items, SO_N + 2, sel,
-		             T("F2 / A: zmień  F1 / B: wróć", "F2 / A: change  F1 / B: back"), overlay);
-		if (c < 0 || c == SO_N + 1)
+		int c = menu(T("Dźwięk", "Sound"), items, 5, sel,
+		             T("MFK / F2 / A: zmień  F1 / B / GEN: wróć", "MFK / F2 / A: change  F1 / B / GEN: back"), overlay);
+		if (c < 0 || c == 4)
 			break;
 		sel = c;
+		if (c < 3)
+			c = shown[c];
+		else
+			c = SO_N;
 		if (c == SO_N) {
 			const char *l[] = {sound_save() ? T("Zapisane w NES/sound.txt.", "Saved in NES/sound.txt.")
 			                                : T("Nie udało się zapisać.", "Could not save.")};
@@ -3693,7 +3688,7 @@ static void sound_menu(bool overlay)
 }
 
 /* What the in-game menu can do */
-enum { M_RESUME, M_VOLUME, M_SAVE, M_LOAD, M_RESET, M_HELP, M_SOUND, M_PAD, M_PAIR, M_LIST, M_OFF, M_N };
+enum { M_RESUME, M_VOLUME, M_SAVE, M_LOAD, M_HELP, M_SOUND, M_PAD, M_PAIR, M_RESET, M_LIST, M_OFF, M_N };
 
 static bool state_exists(int slot)
 {
@@ -3710,12 +3705,11 @@ static int game_menu(void)
 	const char *items[M_N] = {
 		T("Wróć do gry", "Back to the game"), vol, T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
-		T("Reset gry", "Reset the game"), T("Sterowanie", "Controls"), T("Dźwięk radia", "Radio sound"),
-		T("Przyciski pada", "Pad buttons"),
-		T("Bluetooth", "Bluetooth"), T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
+		T("Sterowanie", "Controls"), T("Dźwięk", "Sound"), T("Przyciski pada", "Pad buttons"),
+		T("Bluetooth", "Bluetooth"), T("Zacznij grę od nowa", "Start the game again"), T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
 		T("Wyłącz radio (start: wybór systemu)", "Radio off (on again: choose a system)"),
 	};
-	int c = menu(cur_base, items, M_N, 0, T("F2 / A: wybierz  GEN: wróć do gry", "F2 / A: choose  GEN: back to the game"), true);
+	int c = menu(cur_base, items, M_N, 0, T("MFK / F2 / A: wybierz  GEN: wróć do gry", "MFK / F2 / A: choose  GEN: back to the game"), true);
 	return c < 0 ? M_RESUME : c;
 }
 
@@ -3998,11 +3992,11 @@ static void game_side(int sel, int x, int y, int w, int h)
 	} else {
 		static const char *pl[] = {"Pady, klawiatury i myszy: szukanie, parowanie, lista sparowanych.",
 		                           "Własny układ przycisków pada, naciskany po kolei.",
-		                           "Ustawienia toru dźwięku radia, słychać je od razu na melodii.",
+		                           "Głośność gry, głośnik radia i wyjście dźwięku, słychać od razu na melodii.",
 		                           "Radio wyłącza się całkiem. Po włączeniu: menu wyboru systemu."};
 		static const char *en[] = {"Pads, keyboards and mice: looking, pairing, the paired list.",
 		                           "Your own pad layout, pressed in turn.",
-		                           "The radio's sound path, heard at once on a tune.",
+		                           "The game's volume, the radio's speaker and the output, heard at once on a tune.",
 		                           "The radio switches off. On again: the menu to choose a system."};
 		int k = sel - (list_games ? list_games : 1);
 		if (k >= 0 && k < 4)
@@ -4036,7 +4030,7 @@ static void game_list(void)
 		}
 		enum { X_PAIR, X_PAD, X_SOUND, X_OFF, X_N };
 		const char *extra[X_N] = {
-			"› Bluetooth", T("› Przyciski pada", "› Pad buttons"), T("› Dźwięk radia", "› Radio sound"),
+			"› Bluetooth", T("› Przyciski pada", "› Pad buttons"), T("› Dźwięk", "› Sound"),
 			T("› Wyłącz radio", "› Switch the radio off"),
 		};
 		static const char *items[MAX_GAMES + X_N + 1];
