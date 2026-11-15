@@ -973,8 +973,8 @@ static void default_map(struct dev *d)
 	struct padmap *m = &d->map;
 	memset(m, 0, sizeof *m);
 	if (name_has(d->name, xbox)) {           /* A B _ X Y _ LB RB _ _ View Menu Xbox */
-		d->profile = "Xbox";
-		bind_key(m, J_A, BTN_EAST);  bind_key(m, J_B, BTN_SOUTH);
+		d->profile = "Xbox";                 /* by the letters: Xbox A is NES A, Xbox B is NES B */
+		bind_key(m, J_A, BTN_SOUTH); bind_key(m, J_B, BTN_EAST);
 		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_WEST);
 		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
 	} else if (name_has(d->name, ps)) {      /* Square Cross Circle Triangle L1 R1 L2 R2 Share Options L3 R3 PS */
