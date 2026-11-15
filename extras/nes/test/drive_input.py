@@ -32,8 +32,9 @@ def log(m):
 
 t0 = time.time()
 time.sleep(2.0)
-log("list: hat down, up, A starts the game")
+log("main menu: hat down, up, A opens the games, A starts the game")
 axis(ABS["HAT0Y"], 1, 0); axis(ABS["HAT0Y"], -1, 0); tap("pad", EV_KEY, BTN["SOUTH"])   # BTN_A: A
+time.sleep(0.8); tap("pad", EV_KEY, BTN["SOUTH"])
 time.sleep(1.0)
 log("game: hat right + A held")
 ev("pad", EV_ABS, ABS["HAT0X"], 1); ev("pad", EV_KEY, BTN["SOUTH"], 1); time.sleep(0.5)
@@ -49,9 +50,13 @@ log("game: Select+Start = menu; B = back to the game")
 ev("pad", EV_KEY, BTN["SELECT"], 1); ev("pad", EV_KEY, BTN["START"], 1); time.sleep(0.3)
 ev("pad", EV_KEY, BTN["SELECT"], 0); ev("pad", EV_KEY, BTN["START"], 0); time.sleep(1.0)
 tap("pad", EV_KEY, BTN["EAST"]); time.sleep(1.0)                      # BTN_B: B, back
-log("game: Esc = menu, down x6 to Pad buttons, A")
+log("game: Esc = menu, down x6 to Leave the game, A; B out of the games; down x2 to Pad buttons, A")
 tap("kbd", EV_KEY, KEY["ESC"]); time.sleep(0.8)
 for _ in range(6):
+    axis(ABS["HAT0Y"], 1, 0, 0.1)
+tap("pad", EV_KEY, BTN["SOUTH"]); time.sleep(1.0)
+tap("pad", EV_KEY, BTN["EAST"]); time.sleep(0.8)
+for _ in range(2):
     axis(ABS["HAT0Y"], 1, 0, 0.1)
 tap("pad", EV_KEY, BTN["SOUTH"]); time.sleep(1.0)
 log("learning: trigger noise first, then up down left right A B select start turboA turboB")
@@ -63,6 +68,10 @@ axis(ABS["X"], 255, 128); time.sleep(0.4)
 for b in ("WEST", "NORTH", "TL", "TR", "THUMBL", "THUMBR"):
     tap("pad", EV_KEY, BTN[b]); time.sleep(0.4)
 time.sleep(3.5)
+log("after learning: back in the main menu; hat up x2, Enter, Enter: the game again")
+for _ in range(2):
+    axis(ABS["HAT0Y"], -1, 0, 0.1)
+tap("kbd", EV_KEY, KEY["ENTER"]); time.sleep(0.8); tap("kbd", EV_KEY, KEY["ENTER"]); time.sleep(1.2)
 log("after learning: WEST should be A, NORTH B")
 ev("pad", EV_KEY, BTN["WEST"], 1); time.sleep(0.4); ev("pad", EV_KEY, BTN["WEST"], 0); time.sleep(0.4)
 ev("pad", EV_KEY, BTN["NORTH"], 1); time.sleep(0.4); ev("pad", EV_KEY, BTN["NORTH"], 0); time.sleep(0.4)

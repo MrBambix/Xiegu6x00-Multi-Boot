@@ -99,6 +99,48 @@ def extra_of(entry):
     return entry.get("extra") or getattr(entry.get("sys"), "extra", None)
 
 
+NES_PICTURES = (".png", ".jpg", ".jpeg", ".bmp")
+
+
+def nes_pictures(paths):
+    """The games' pictures, shown beside the list on the radio: a file of the game's name with
+    .png/.jpg/.bmp beside it (or in its .zip). For NES/IMG: [(stem + extension, bytes or path)]"""
+    import zipfile
+    out, seen = [], set()
+
+    def add(stem, ext, data):
+        if stem.lower() not in seen:
+            seen.add(stem.lower())
+            out.append((stem + ext.lower(), data))
+
+    for p in paths:
+        if p.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(p) as z:
+                    files = [i for i in z.infolist() if not i.is_dir()]
+                    stems = [os.path.splitext(os.path.basename(i.filename))[0] for i in files
+                             if i.filename.lower().endswith(NES_GAMES)]
+                    pics = [i for i in files if i.filename.lower().endswith(NES_PICTURES) and i.file_size < 8 << 20]
+                    for i in pics:
+                        stem, ext = os.path.splitext(os.path.basename(i.filename))
+                        if stem.lower() in (s.lower() for s in stems):
+                            add(stem, ext, z.read(i))
+                    if len(stems) == 1 and pics and stems[0].lower() not in seen:   # one game, its picture
+                        add(stems[0], os.path.splitext(pics[0].filename)[1], z.read(pics[0]))
+            except (zipfile.BadZipFile, OSError):
+                pass
+        elif p.lower().endswith(NES_PICTURES) and os.path.getsize(p) < 8 << 20:   # chosen on its own
+            stem, ext = os.path.splitext(os.path.basename(p))
+            add(stem, ext, p)
+        elif p.lower().endswith(NES_GAMES):
+            stem = os.path.splitext(p)[0]
+            for ext in NES_PICTURES + tuple(e.upper() for e in NES_PICTURES):
+                if os.path.isfile(stem + ext) and os.path.getsize(stem + ext) < 8 << 20:
+                    add(os.path.basename(stem), ext, stem + ext)
+                    break
+    return out
+
+
 def nes_games(paths):
     """The NES games to put on the card, from files and .zip archives: [(file name, bytes or path)]"""
     import zipfile
@@ -384,8 +426,9 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
     # the NES emulator's games go on BOOT (any computer sees it), with room for more and the saves
     nes = [e for e in sd if extra_of(e) == "nes"]
     games = nes_games([g for e in nes for g in e.get("games", [])])
+    pics = nes_pictures([g for e in nes for g in e.get("games", [])])
     if nes:
-        kernels += sum(len(g) if isinstance(g, bytes) else os.path.getsize(g) for _n, g in games)
+        kernels += sum(len(g) if isinstance(g, bytes) else os.path.getsize(g) for _n, g in games + pics)
         kernels += NES_ROOM_MB * MIB
     pictures = (len(entries) + 1) * 400 * 1024 if gfx else 0
     boot_size = _up(max(64 * MIB, kernels + pictures + boot_extra_mb * MIB + 4 * MIB) // SECTOR) * SECTOR
@@ -513,12 +556,14 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
         fat.add_file("NES/" + t("WGRAJ-TU-GRY.txt"), (
             t("Wgraj tu swoje gry NES (.nes, .fds, .unf, .nsf). Emulator pokaze je na liscie.") + "\r\n" +
             t("Podfoldery tez dzialaja. Zapisy gier: folder SAVES. BIOS do gier FDS: BIOS/disksys.rom.") +
+            "\r\n" + t("Obrazek gry (.png, .jpg, .bmp) o nazwie gry obok niej albo w folderze IMG: widac go przy liscie.") +
             "\r\n").encode())
-        for name, g in games:
-            if isinstance(g, bytes):
-                fat.add_file("NES/" + name, g)
-            else:
-                fat.add_file("NES/" + name, src=(g, 0, os.path.getsize(g)))
+        for folder, files in (("NES/", games), ("NES/IMG/", pics)):
+            for name, g in files:
+                if isinstance(g, bytes):
+                    fat.add_file(folder + name, g)
+                else:
+                    fat.add_file(folder + name, src=(g, 0, os.path.getsize(g)))
     if any(extra_of(e) == "doom" or (getattr(e.get("sys"), "donor", None) is not None and not extra_of(e))
            for e in sd):
         # Doom's settings, read at its start (extras/doom/x6100_sound.c)

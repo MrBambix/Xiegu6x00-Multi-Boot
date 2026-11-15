@@ -858,14 +858,14 @@ class App:
             if nes is None:
                 return
         paths = filedialog.askopenfilenames(
-            title=t("Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi)"),
-            filetypes=[(t("Gry NES"), "*.nes *.NES *.fds *.FDS *.unf *.UNF *.unif *.nsf *.NSF *.zip *.ZIP"),
+            title=t("Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi; obrazki gier .png, .jpg)"),
+            filetypes=[(t("Gry NES"), "*.nes *.NES *.fds *.FDS *.unf *.UNF *.unif *.nsf *.NSF *.zip *.ZIP *.png *.PNG *.jpg *.JPG *.jpeg *.bmp *.BMP"),
                        (t("Wszystkie pliki"), "*")])
         if not paths:
             return
-        from .compose import ComposeError, nes_games
+        from .compose import ComposeError, nes_games, nes_pictures
         try:
-            found = nes_games(list(paths))
+            found = nes_games(list(paths)) or nes_pictures(list(paths))
         except ComposeError as e:
             messagebox.showerror(APP, str(e))
             return

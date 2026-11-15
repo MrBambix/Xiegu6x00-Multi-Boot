@@ -56,6 +56,18 @@
 
 #include "libretro.h"
 #include "font_inter.h"
+/* Game pictures (PNG, JPEG, BMP) beside the games: stb_image by Sean Barrett (public domain / MIT) */
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_BMP
+#define STBI_NO_LINEAR
+#define STBI_NO_HDR
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "stb_image.h"
+#pragma GCC diagnostic pop
 
 #define LAND_W   800             /* the screen, as the radio is held */
 #define LAND_H   480
@@ -889,8 +901,8 @@ static int radio_key(unsigned code)
 	case HAPPY(5):  return J_DOWN;     /* BAND down */
 	case HAPPY(8):  return J_LEFT;     /* DFN */
 	case HAPPY(9):  return J_RIGHT;    /* DFL */
-	case HAPPY(13): return J_B;        /* F1 */
-	case HAPPY(14): return J_A;        /* F2 */
+	case HAPPY(13): return J_A;        /* F1 */
+	case HAPPY(14): return J_B;        /* F2 */
 	case HAPPY(4):  return J_A;        /* PTT */
 	case HAPPY(15): return J_SELECT;   /* F3 */
 	case HAPPY(19): return J_START;    /* F4 */
@@ -1610,7 +1622,7 @@ struct list_view {
 static void list_geom(const struct list_view *v, int *x, int *y, int *w, int *rows, int *row_h)
 {
 	if (v->overlay) {
-		*x = 150; *y = 62; *w = 500; *row_h = OROW; *rows = 11;
+		*x = 150; *y = 62; *w = 500; *row_h = OROW; *rows = 11;   /* room for 11, the game's 8 */
 	} else {
 		*x = 20; *y = 76; *w = v->side ? 470 : LAND_W - 40; *row_h = ROW; *rows = 8;
 	}
@@ -1846,8 +1858,8 @@ static void message(const char *title, const char *const *lines, int n, unsigned
 		int h = 96;
 		for (int i = 0; i < k; i++)
 			h += all[i][0] == '#' ? 34 : 28;
-		int y = (LAND_H - h) / 2 + h - 40, x = (LAND_W + 700) / 2 - 24 - (text_w(F_SMALL, "F2 / A / Enter") + 21 + text_w(F_SMALL, "OK") + 18);
-		key_chip(x, y, "F2 / A / Enter", "OK");
+		int y = (LAND_H - h) / 2 + h - 40, x = (LAND_W + 700) / 2 - 24 - (text_w(F_SMALL, "MFK / F1 / A") + 21 + text_w(F_SMALL, "OK") + 18);
+		key_chip(x, y, "MFK / F1 / A", "OK");
 		present(x, y, 260, 24);
 	}
 	if (test_mode && !keys_scripted())
@@ -1866,8 +1878,8 @@ static void message(const char *title, const char *const *lines, int n, unsigned
 	input_settle();
 }
 
-static const char *HINT_LIST_PL = "MFK / F2 / A: wybierz  F1 / B / GEN: wstecz";
-static const char *HINT_LIST_EN = "MFK / F2 / A: choose  F1 / B / GEN: back";
+static const char *HINT_LIST_PL = "MFK / F1 / A: wybierz  F2 / B / GEN: wstecz";
+static const char *HINT_LIST_EN = "MFK / F1 / A: choose  F2 / B / GEN: back";
 
 /* ------------------------------------------------------------------------------------------ */
 /* Sound                                                                                      */
@@ -3246,7 +3258,7 @@ static bool bt_wait(const char *title, const char *what, unsigned secs, bool sho
 			break;
 		}
 		char sec[64];
-		snprintf(sec, sizeof sec, "%u s   (F1/B: %s)", el, T("przerwij", "stop"));
+		snprintf(sec, sizeof sec, "%u s   (F2/B: %s)", el, T("przerwij", "stop"));
 		if (show_code && op_code[0]) {
 			const char *l[] = {what, T("Wpisz ten kod na klawiaturze i Enter:", "Type this code on the keyboard, then Enter:"),
 			                   op_code, sec};
@@ -3319,7 +3331,7 @@ static void bt_scan(void)
 	const char *items[MAX_BT];
 	char title[64];
 	struct list_view v = {title, items, 0, 0, 0,
-	                      T("F2 / A: paruj  F1 / B: wstecz", "F2 / A: pair  F1 / B: back"),
+	                      T("MFK / F1 / A: paruj  F2 / B: wstecz", "MFK / F1 / A: pair  F2 / B: back"),
 	                      T("Włącz w urządzeniu tryb parowania (pad: zwykle przytrzymaj jego przycisk parowania "
 	                        "kilka sekund). Pojawi się na tej liście.",
 	                        "Put the device in pairing mode (a pad: usually hold its pairing button a few seconds). "
@@ -3602,7 +3614,7 @@ static void learn_pad(void)
 /* The sound's levels: each choice changes one at once (heard in the game) */
 static void game_to_canvas(void);
 
-static void sound_menu(bool overlay)
+static void __attribute__((unused)) sound_menu(bool overlay)   /* hidden for now: the VOL knob is enough */
 {
 	int sel = 0;
 	for (;;) {
@@ -3629,7 +3641,7 @@ static void sound_menu(bool overlay)
 		if (overlay)
 			game_to_canvas();
 		int c = menu(T("Dźwięk", "Sound"), items, 5, sel,
-		             T("MFK / F2 / A: zmień  F1 / B / GEN: wróć", "MFK / F2 / A: change  F1 / B / GEN: back"), overlay);
+		             T("MFK / F1 / A: zmień  F2 / B / GEN: wróć", "MFK / F1 / A: change  F2 / B / GEN: back"), overlay);
 		if (c < 0 || c == 4)
 			break;
 		sel = c;
@@ -3654,7 +3666,7 @@ static void sound_menu(bool overlay)
 }
 
 /* What the in-game menu can do */
-enum { M_RESUME, M_VOLUME, M_SAVE, M_LOAD, M_HELP, M_SOUND, M_PAD, M_PAIR, M_RESET, M_LIST, M_OFF, M_N };
+enum { M_RESUME, M_RESET, M_VOLUME, M_SAVE, M_LOAD, M_PAIR, M_LIST, M_OFF, M_N };
 
 static bool state_exists(int slot)
 {
@@ -3669,13 +3681,13 @@ static int game_menu(void)
 	char vol[64];
 	snprintf(vol, sizeof vol, T("Głośność: %d z 55  (gałka VOL)", "Volume: %d of 55  (VOL knob)"), set_rxvol);
 	const char *items[M_N] = {
-		T("Wróć do gry", "Back to the game"), vol, T("Zapisz stan", "Save state"),
+		T("Wróć do gry", "Back to the game"), T("Zacznij grę od nowa", "Start the game again"), vol,
+		T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
-		T("Sterowanie", "Controls"), T("Dźwięk", "Sound"), T("Przyciski pada", "Pad buttons"),
-		T("Bluetooth", "Bluetooth"), T("Zacznij grę od nowa", "Start the game again"), T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
-		T("Wyłącz radio (start: wybór systemu)", "Radio off (on again: choose a system)"),
+		T("Bluetooth", "Bluetooth"), T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
+		T("Wyłącz radio", "Switch the radio off"),
 	};
-	int c = menu(cur_base, items, M_N, 0, T("MFK / F2 / A: wybierz  GEN: wróć do gry", "MFK / F2 / A: choose  GEN: back to the game"), true);
+	int c = menu(cur_base, items, M_N, 0, T("MFK / F1 / A: wybierz  GEN: wróć do gry", "MFK / F1 / A: choose  GEN: back to the game"), true);
 	return c < 0 ? M_RESUME : c;
 }
 
@@ -3684,7 +3696,7 @@ static void help(void)
 {
 	const char *pl[] = {
 		"#Radio",
-		"BAND ▲▼, DFN, DFL: krzyżak · F1: B · F2, PTT: A · F5: A turbo",
+		"BAND ▲▼, DFN, DFL: krzyżak · F1, PTT: A · F2: B · F5: A turbo",
 		"F3: Select · F4: Start · gałka VFO: lewo/prawo",
 		"MFK (wciśnięcie) lub GEN: menu · gałka VOL: głośność (AF)",
 		"#Klawiatura",
@@ -3696,7 +3708,7 @@ static void help(void)
 	};
 	const char *en[] = {
 		"#Radio",
-		"BAND ▲▼, DFN, DFL: d-pad · F1: B · F2, PTT: A · F5: turbo A",
+		"BAND ▲▼, DFN, DFL: d-pad · F1, PTT: A · F2: B · F5: turbo A",
 		"F3: Select · F4: Start · VFO knob: left/right",
 		"MFK (pressed) or GEN: menu · VOL knob: the volume",
 		"#Keyboard",
@@ -3811,15 +3823,15 @@ static void play(int idx)
 			case M_SAVE: msg = save_state(0) ? T("Stan zapisany", "State saved") : T("Nie zapisano", "Not saved"); break;
 			case M_LOAD: msg = load_state(0) ? T("Stan wczytany", "State loaded") : T("Brak zapisu", "No saved state"); break;
 			case M_RESET: retro_reset(); break;
-			case M_HELP: help(); break;
+
 			case M_VOLUME:                    /* a step up, round again from the top; the menu again */
 				set_rxvol = set_rxvol >= 55 ? 10 : set_rxvol + 5 > 55 ? 55 : set_rxvol + 5;
 				sound_apply();
 				sound_save();
 				want_menu = true;
 				break;
-			case M_SOUND: sound_menu(true); break;
-			case M_PAD: learn_pad(); break;
+
+
 			case M_PAIR: bt_menu(); break;
 			case M_LIST: save_state(9); done = true; break;
 			case M_OFF: leave(RB_POWER_OFF); break;
@@ -3914,12 +3926,90 @@ static void play(int idx)
 /* Beside the game list: the chosen game (its saves, its size), or what the chosen thing does */
 static int list_games;
 
+/* A game's picture: a file of the game's name with .png, .jpg or .bmp beside it, or in the
+ * NES/IMG folder. One kept, fitted to the side panel, so the list stays quick. */
+#define COVER_W 300
+#define COVER_H 190
+static struct { char path[700]; bool have; int w, h; uint32_t px[COVER_W * COVER_H]; } cover;
+
+static bool cover_find(const char *game, char *out, size_t n)
+{
+	static const char *exts[] = {"png", "jpg", "jpeg", "bmp", "PNG", "JPG", "JPEG", "BMP"};
+	char stem[600], base[300];
+	snprintf(stem, sizeof stem, "%s", game);
+	char *dot = strrchr(stem, '.'), *sl = strrchr(stem, '/');
+	if (dot && (!sl || dot > sl)) *dot = 0;
+	snprintf(base, sizeof base, "%s", (sl = strrchr(stem, '/')) ? sl + 1 : stem);
+	for (int where = 0; where < 2; where++)
+		for (unsigned i = 0; i < sizeof exts / sizeof *exts; i++) {
+			if (where == 0) snprintf(out, n, "%s.%s", stem, exts[i]);
+			else snprintf(out, n, "%s/IMG/%s.%s", ROMS, base, exts[i]);
+			struct stat st;
+			if (stat(out, &st) == 0 && S_ISREG(st.st_mode) && st.st_size < (8 << 20))
+				return true;
+		}
+	return false;
+}
+
+static bool cover_load(const char *game, int maxw, int maxh)
+{
+	char img[700];
+	if (!cover_find(game, img, sizeof img)) {
+		cover.path[0] = 0;
+		return cover.have = false;
+	}
+	if (!strcmp(img, cover.path))
+		return cover.have;
+	snprintf(cover.path, sizeof cover.path, "%s", img);
+	cover.have = false;
+	int iw, ih, nc;
+	if (!stbi_info(img, &iw, &ih, &nc) || iw <= 0 || ih <= 0 || iw > 4096 || ih > 4096)
+		return false;
+	unsigned char *d = stbi_load(img, &iw, &ih, &nc, 3);
+	if (!d)
+		return false;
+	if (maxw > COVER_W) maxw = COVER_W;
+	if (maxh > COVER_H) maxh = COVER_H;
+	int w = maxw, h = ih * maxw / iw;            /* fitted, the shape kept */
+	if (h > maxh) { h = maxh; w = iw * maxh / ih; }
+	if (w < 1) w = 1;
+	if (h < 1) h = 1;
+	for (int y = 0; y < h; y++)                    /* each pixel the mean of its source box */
+		for (int x = 0; x < w; x++) {
+			int x0 = x * iw / w, x1 = (x + 1) * iw / w, y0 = y * ih / h, y1 = (y + 1) * ih / h;
+			if (x1 <= x0) x1 = x0 + 1;
+			if (y1 <= y0) y1 = y0 + 1;
+			unsigned r = 0, g = 0, b = 0, k = 0;
+			for (int yy = y0; yy < y1; yy++)
+				for (int xx = x0; xx < x1; xx++) {
+					const unsigned char *q = d + ((size_t)yy * iw + xx) * 3;
+					r += q[0]; g += q[1]; b += q[2]; k++;
+				}
+			cover.px[y * COVER_W + x] = ((r / k) << 16) | ((g / k) << 8) | (b / k);
+		}
+	stbi_image_free(d);
+	cover.w = w;
+	cover.h = h;
+	logmsg("picture: %s (%dx%d)", img, w, h);
+	return cover.have = true;
+}
+
 static void game_side(int sel, int x, int y, int w, int h)
 {
 	box(x, y, w, h, 16, C_PANEL, C_LINE);
-	draw_pad(x + (w - 150) / 2, y + 20, 150);
 	int ty = y + 104;
-	if (sel < list_games) {
+	bool pic = list_games > 0 && sel < list_games && cover_load(game_path(sel), w - 36, h / 2 - 20);
+	if (pic) {
+		int cx = x + (w - cover.w) / 2, cy = y + 18;
+		for (int yy = 0; yy < cover.h; yy++)
+			if (cy + yy >= 0 && cy + yy < LAND_H)
+				for (int xx = 0; xx < cover.w; xx++)
+					if (cx + xx >= 0 && cx + xx < LAND_W)
+						canvas[(cy + yy) * LAND_W + cx + xx] = cover.px[yy * COVER_W + xx];
+		ty = cy + cover.h + 16;
+	} else
+		draw_pad(x + (w - 150) / 2, y + 20, 150);
+	if (list_games > 0 && sel < list_games) {
 		const char *path = game_path(sel);
 		const char *name = game_names[sel];
 		const char *slash = strrchr(name, '/');
@@ -3959,86 +4049,87 @@ static void game_side(int sel, int x, int y, int w, int h)
 			draw_text(x + 34, ty, F_SMALL, C_TEXT, marks[i].what);
 			ty += 24;
 		}
-	} else {
-		static const char *pl[] = {"Pady, klawiatury i myszy: szukanie, parowanie, lista sparowanych.",
+	} else if (list_games < 0) {                   /* the main menu */
+		static const char *pl[] = {"Twoje gry z folderu NES na karcie.",
+		                           "Pady, klawiatury i myszy: szukanie, parowanie, lista sparowanych.",
 		                           "Własny układ przycisków pada, naciskany po kolei.",
-		                           "Głośność (AF), głośność gry i wyjście dźwięku.",
-		                           "Radio wyłącza się całkiem. Po włączeniu: menu wyboru systemu."};
-		static const char *en[] = {"Pads, keyboards and mice: looking, pairing, the paired list.",
+		                           "Które klawisze radia, klawiatury i pada co robią.",
+		                           "Wyłącza radio."};
+		static const char *en[] = {"Your games from the card's NES folder.",
+		                           "Pads, keyboards and mice: looking, pairing, the paired list.",
 		                           "Your own pad layout, pressed in turn.",
-		                           "The volume (AF), the game's volume and the output.",
-		                           "The radio switches off. On again: the menu to choose a system."};
-		int k = sel - (list_games ? list_games : 1);
-		if (k >= 0 && k < 4)
-			draw_wrapped(x + 18, ty, F_BODY, C_DIM, set_en ? en[k] : pl[k], w - 36, 26, 8);
-		else
-			draw_wrapped(x + 18, ty, F_BODY, C_DIM,
-			             T("Wgraj gry .nes do folderu NES na partycji BOOT karty (widać ją na każdym komputerze).",
-			               "Put .nes games in the NES folder of the card's BOOT partition (any computer sees it)."),
-			             w - 36, 26, 8);
+		                           "What the radio's keys, the keyboard and the pad do.",
+		                           "Switches the radio off."};
+		if (sel >= 0 && sel < 5)
+			draw_wrapped(x + 18, ty, F_BODY, C_DIM, set_en ? en[sel] : pl[sel], w - 36, 26, 8);
 	}
 }
 
-/* The list of games, and what else there is to do */
-static void game_list(void)
+/* The games, a list of their own (a tab of the main menu) */
+static void games_tab(void)
 {
 	int sel = 0;
-	bool first = true;
+	char last[700] = "";
+	FILE *lf = fopen(last_file, "r");                 /* the game played last, chosen first */
+	if (lf) {
+		if (!fgets(last, sizeof last, lf)) last[0] = 0;
+		fclose(lf);
+	}
+	scan_games();
+	for (int i = 0; i < n_games; i++)
+		if (!strcmp(game_path(i), last))
+			sel = i;
 	for (;;) {
-		scan_games();
-		if (first) {                              /* the game played last */
-			first = false;
-			char last[700] = "";
-			FILE *lf = fopen(last_file, "r");
-			if (lf) {
-				if (!fgets(last, sizeof last, lf)) last[0] = 0;
-				fclose(lf);
-			}
-			for (int i = 0; i < n_games; i++)
-				if (!strcmp(game_path(i), last))
-					sel = i;
-		}
-		enum { X_PAIR, X_PAD, X_SOUND, X_OFF, X_N };
-		const char *extra[X_N] = {
-			"› Bluetooth", T("› Przyciski pada", "› Pad buttons"), T("› Dźwięk", "› Sound"),
-			T("› Wyłącz radio", "› Switch the radio off"),
-		};
-		static const char *items[MAX_GAMES + X_N + 1];
-		int n = 0;
-		if (!n_games)
-			items[n++] = T("Brak gier: wgraj pliki .nes", "No games: put .nes files in");
-		for (int i = 0; i < n_games; i++)
-			items[n++] = game_names[i];
-		for (int i = 0; i < X_N; i++)
-			items[n++] = extra[i];
-		int base = n_games ? n_games : 1;
-		char title[64];
-		snprintf(title, sizeof title, T("Gry NES (%d)", "NES games (%d)"), n_games);
-		const char *hint = n_games ? (set_en ? HINT_LIST_EN : HINT_LIST_PL)
-		                           : T("Gry: folder NES na partycji BOOT karty", "Games: the NES folder on the card's BOOT");
-		list_games = n_games;
-		int c = menu_ex(title, items, n, sel, hint, false, game_side);
-		if (c < 0)
-			continue;
-		sel = c;
-		logmsg("list: chose %d of %d (%s)", c, n, c < n ? items[c] : "?");
-		if (c < n_games) {
-			play(c);
-			continue;
-		}
-		if (c < base) {
+		if (!n_games) {
 			const char *l[] = {T("Skopiuj gry (.nes, .fds, .unf)", "Copy games (.nes, .fds, .unf)"),
 			                   T("do folderu NES na partycji", "to the NES folder on the card's"),
 			                   T("BOOT karty (widać ją na", "BOOT partition (any computer"),
 			                   T("każdym komputerze), albo dodaj", "sees it), or add them in"),
 			                   T("je w aplikacji przy karcie.", "the app with the card.")};
 			message(T("Brak gier", "No games"), l, 5, 0);
-			continue;
+			return;
 		}
-		switch (c - base) {
+		char title[64];
+		snprintf(title, sizeof title, T("Lista gier (%d)", "Games (%d)"), n_games);
+		list_games = n_games;
+		int c = menu_ex(title, (const char *const *)game_names, n_games, sel, set_en ? HINT_LIST_EN : HINT_LIST_PL,
+		                false, game_side);
+		if (c < 0)
+			return;
+		sel = c;
+		logmsg("list: chose %d of %d (%s)", c, n_games, game_names[c]);
+		play(c);
+		scan_games();
+		if (sel >= n_games)
+			sel = 0;
+	}
+}
+
+/* The main menu: the games, Bluetooth, the pad's buttons, the controls, the radio off */
+static void game_list(void)
+{
+	int sel = 0;
+	for (;;) {
+		scan_games();
+		enum { X_GAMES, X_PAIR, X_PAD, X_HELP, X_OFF, X_N };
+		char games_item[64];
+		snprintf(games_item, sizeof games_item, T("Lista gier (%d)", "Games (%d)"), n_games);
+		const char *items[X_N] = {
+			games_item, "Bluetooth", T("Przyciski pada", "Pad buttons"), T("Sterowanie", "Controls"),
+			T("Wyłącz radio", "Switch the radio off"),
+		};
+		list_games = -1;                              /* the panel beside: what each item does */
+		int c = menu_ex(T("Emulator NES", "NES emulator"), items, X_N, sel, set_en ? HINT_LIST_EN : HINT_LIST_PL,
+		                false, game_side);
+		if (c < 0)
+			continue;
+		sel = c;
+		logmsg("menu: chose %s", items[c]);
+		switch (c) {
+		case X_GAMES: games_tab(); break;
 		case X_PAIR: bt_menu(); break;
 		case X_PAD: learn_pad(); break;
-		case X_SOUND: sound_menu(false); break;
+		case X_HELP: help(); break;
 		case X_OFF: leave(RB_POWER_OFF); break;
 		}
 	}

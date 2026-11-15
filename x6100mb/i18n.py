@@ -443,7 +443,8 @@ EN = {
     "Emulator NES uruchamia się z jądrem systemu z obrazu (np. OpenX6X00). Dodaj najpierw taki system, potem emulator.":
         "The NES emulator starts with the kernel of a system from an image (e.g. OpenX6X00). Add such a system "
         "first, then the emulator.",
-    "Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi)": "Your NES games (.nes, .fds, .unf, .nsf or a .zip of them)",
+    "Twoje gry NES (.nes, .fds, .unf, .nsf albo .zip z nimi; obrazki gier .png, .jpg)":
+        "Your NES games (.nes, .fds, .unf, .nsf or a .zip of them; game pictures .png, .jpg)",
     "Gry NES": "NES games",
     "Wszystkie pliki": "All files",
     "W wybranych plikach nie ma gier NES (.nes, .fds, .unf, .nsf).":
@@ -466,6 +467,8 @@ EN = {
         "# Games: the NES folder on this partition (.nes, .fds, .unf, .nsf); saves: NES/SAVES; FDS BIOS: "
         "NES/BIOS/disksys.rom; log: nes-log.txt",
     "WGRAJ-TU-GRY.txt": "PUT-GAMES-HERE.txt",
+    "Obrazek gry (.png, .jpg, .bmp) o nazwie gry obok niej albo w folderze IMG: widac go przy liscie.":
+        "A game's picture (.png, .jpg, .bmp) named like the game, beside it or in the IMG folder: it shows by the list.",
     "Wgraj tu swoje gry NES (.nes, .fds, .unf, .nsf). Emulator pokaze je na liscie.":
         "Put your NES games here (.nes, .fds, .unf, .nsf). The emulator lists them.",
     "Podfoldery tez dzialaja. Zapisy gier: folder SAVES. BIOS do gier FDS: BIOS/disksys.rom.":
@@ -511,13 +514,14 @@ Gry: nie ma żadnej w aplikacji, wgrywasz własne (.nes, .fds, .unf, .nsf; .zip 
 przyciskiem „Gry NES…” przy tworzeniu karty albo później, kopiując je do folderu NES na
 partycji BOOT karty (widać ją na każdym komputerze). Podfoldery działają. Zapisy gier (baterie
 i stany) w NES/SAVES. Gry z dyskietek FDS potrzebują NES/BIOS/disksys.rom.
+Obrazek gry (.png, .jpg, .bmp) o nazwie gry, obok niej albo w NES/IMG, widać przy liście gier.
 Emulator też uruchamia się z jądrem PIERWSZEGO systemu z obrazu na liście.
 
 Sterowanie radiem (gracz 1)
-  BAND ▲/▼, DFN, DFL: krzyżak    F1: B    F2 lub PTT: A    F3: Select    F4: Start
+  BAND ▲/▼, DFN, DFL: krzyżak    F1 lub PTT: A    F2: B    F3: Select    F4: Start
   F5: A turbo    Gałka VFO: lewo/prawo    Gałka VOL: głośnik radia
   Wciśnięcie MFK lub GEN: menu emulatora. W menu: gałki MFK/VFO i krzyżak wybierają,
-  MFK lub F2 zatwierdza, F1 lub GEN wraca. POWER: wyłączenie radia.
+  MFK lub F1 zatwierdza, F2 lub GEN wraca. POWER: wyłączenie radia.
 
 Klawiatura, mysz, pady (USB i Bluetooth)
   Klawiatura: strzałki lub WASD, X/K = A, Z/J = B, Enter = Start, Shift lub spacja = Select,
@@ -583,13 +587,14 @@ Games: none comes with the app, you add your own (.nes, .fds, .unf, .nsf; .zip a
 too): with the "NES games…" button when you make the card, or later by copying them to the NES
 folder on the card's BOOT partition (any computer sees it). Subfolders work. Saves (battery and
 states) go to NES/SAVES. FDS disk games need NES/BIOS/disksys.rom.
+A game's picture (.png, .jpg, .bmp) named like the game, beside it or in NES/IMG, shows by the list.
 The emulator, too, starts with the kernel of the FIRST system from an image on the list.
 
 The radio's controls (player 1)
-  BAND ▲/▼, DFN, DFL: the d-pad    F1: B    F2 or PTT: A    F3: Select    F4: Start
+  BAND ▲/▼, DFN, DFL: the d-pad    F1 or PTT: A    F2: B    F3: Select    F4: Start
   F5: turbo A    VFO knob: left/right    VOL knob: the radio's speaker
   MFK pressed or GEN: the emulator's menu. In the menus: the MFK/VFO knobs and the d-pad
-  choose, MFK or F2 confirms, F1 or GEN goes back. POWER: radio off.
+  choose, MFK or F1 confirms, F2 or GEN goes back. POWER: radio off.
 
 Keyboard, mouse, pads (USB and Bluetooth)
   Keyboard: arrows or WASD, X/K = A, Z/J = B, Enter = Start, Shift or Space = Select,

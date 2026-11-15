@@ -33,7 +33,7 @@ build() {   # build CC OUTDIR EXTRA_FLAGS...
     for f in pcm pcm_hw mixer mixer_hw limits snd_card_plugin; do
         $cc -O2 -w -I"$TA/include" "$@" -c "$TA/src/$f.c" -o "$out/ta_$f.o"
     done
-    $cc -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -I"$RI" -I"$TA/include" -I"$W" "$@" \
+    $cc -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -I"$RI" -I"$TA/include" -I"$W" -I/usr/include/stb "$@" \
         -c "$HERE/nes_x6100.c" -o "$out/nes_x6100.o"
     # A name the front end takes from the C library must not be one the core defines too: the
     # static link takes the core's (FCEUmm's global "sync" variable stood in for sync() so)
@@ -138,7 +138,7 @@ PY
     for f in pad kbd mouse; do mkfifo "$T/in/$f"; done
     (cd "$T" && NES_TEST_LOG="$T/in.log" NES_TEST_FB=480x800 NES_TEST_ROMS="$T/roms" \
         NES_TEST_DEVS="pad:$T/in/pad,kbd:$T/in/kbd,mouse:$T/in/mouse" \
-        NES_TEST_KEYS="$(printf 'w%.0s' $(seq 1 90))" timeout 120 "$W/nes-pc") &
+        NES_TEST_KEYS="$(printf 'w%.0s' $(seq 1 140))" timeout 150 "$W/nes-pc") &
     sleep 1
     python3 "$HERE/test/drive_input.py" "$T/in" > "$T/drive.log"
     wait
