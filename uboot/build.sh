@@ -30,6 +30,7 @@ for o in VIDEO_LCD_ST7701S_X6100 CONSOLE_ROTATION VIDEO_FONT_16X32 CMD_GPIO VIDE
 done
 make -s -j"$(nproc)"
 cp u-boot-sunxi-with-spl.bin "$HERE/out/u-boot-x6100-menu.bin"
-strings "$HERE/out/u-boot-x6100-menu.bin" | grep -m1 "U-Boot SPL"
-strings "$HERE/out/u-boot-x6100-menu.bin" | grep -q "X6100 POWER key" || { echo "no pek command"; exit 1; }
+strings "$HERE/out/u-boot-x6100-menu.bin" > "$W/strings.txt"; grep -m1 "U-Boot SPL" "$W/strings.txt"
+grep -q "X6100 POWER key" "$W/strings.txt" || { echo "no pek command"; exit 1; }
+grep -q "base board switches the radio off" "$W/strings.txt" || { echo "no boff command"; exit 1; }
 ls -la "$HERE/out"

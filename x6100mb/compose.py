@@ -215,9 +215,12 @@ def menu_script(entries, default, timeout_s, title="X6100 MULTIBOOT", gfx=False,
             if r == row:
                 a("    if gpio input %s; then setenv bm_choice %d; fi" % (col, i + 1))
         a("    gpio input %s" % row)
-    # POWER switches the radio off here too (the menu's U-Boot: pek, poweroff on the AXP223)
+    # POWER switches the radio off here too (the menu's U-Boot: pek; boff, the base board's power-off)
     a("    if pek; then " + _shown(("%s[%s%s[1;31m%s          %s[0;37;40m" % (ESC, count_row, ESC, t(POWERING_OFF), ESC))
-                              if ansi else t(POWERING_OFF) + "\\n") + "; sleep 1; poweroff; fi")
+                              if ansi else t(POWERING_OFF) + "\\n") +
+      # the base board cuts the power (it holds it: the PMIC's power-off alone left the radio on);
+      # the PMIC's after it, for a U-Boot without boff
+      "; boff; sleep 1; poweroff; fi")
     a('    if test -z "${bm_choice}"; then')
     a("        if itest ${bm_wait} -eq 1; then sleep 0.1; setexpr i ${i} + 1; setexpr i ${i} % a0")
     a("        elif itest ${i} -ge ${bm_ticks}; then setenv bm_choice ${bm_default}; else sleep 0.1; setexpr i ${i} + 1; fi")
