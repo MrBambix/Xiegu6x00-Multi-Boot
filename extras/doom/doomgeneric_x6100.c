@@ -236,12 +236,19 @@ static void text_mode(void)
 		ioctl(tty_fd, KDSETMODE, KD_TEXT);
 }
 
+bool x6100_radio_poweroff(void);
+
 static void leave(int cmd)
 {
 	text_mode();
 	logmsg(cmd == (int)RB_POWER_OFF ? "POWER: switching off" : "leaving: restart");
 	close_log();
 	sync();
+	if (cmd == (int)RB_POWER_OFF) {
+		/* the base board cuts the power (the radio's own way); Linux's power-off after it */
+		x6100_radio_poweroff();
+		sleep(1);
+	}
 	if (getpid() == 1)
 		reboot(cmd);
 	exit(0);

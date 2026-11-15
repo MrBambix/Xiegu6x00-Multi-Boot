@@ -144,6 +144,19 @@ static bool base_write(int fd, unsigned reg, uint32_t val)
  * to the speaker; both microphones' gain 0 in register 20 (line in/out at its default 10), so no
  * microphone is heard; the AF volume, register 14, at vol (0..55). Without the radio's own
  * software none of it is set, and the codec's sound only went towards the transmitter. */
+/* The radio switched off the way its own software does it (X6100Control's x6100_control_poweroff):
+ * register 12 with its power-off bit; the base board then cuts the power a moment later. Linux's own
+ * power-off alone leaves the base board holding the power on: the radio stayed on. */
+bool x6100_radio_poweroff(void)
+{
+	int fd = open("/dev/i2c-0", O_RDWR);
+	if (fd < 0)
+		return false;
+	bool ok = base_write(fd, 12, (x6100_record ? 0x8u : 0u) | 0x10000u);
+	close(fd);
+	return ok;
+}
+
 void x6100_radio_audio(int vol)
 {
 	if (vol < 0 || vol > 55)
