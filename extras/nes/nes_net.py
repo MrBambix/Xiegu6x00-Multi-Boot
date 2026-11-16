@@ -172,25 +172,39 @@ font-weight:700;font-size:15px;cursor:pointer}
 table{width:100%%;border-collapse:collapse}td{padding:9px 6px;border-bottom:1px solid #2a3a52}
 td.s{color:#8d9db2;text-align:right;white-space:nowrap}
 .del{background:#5a1f27;color:#ffc4c7;padding:6px 12px}
-#msg{min-height:22px;color:#bdf3d6;margin:8px 0}
+#msg{color:#bdf3d6;margin-left:10px}
+button:disabled{opacity:.4;cursor:default}
 </style></head><body><main>
 <h1>Gry NES na X6100</h1><p class="sub">%(n)d gier · wolne %(free)s MB na karcie</p>
 <div class="drop" id="drop"><p>Upuść tu pliki gier (.nes, .fds, .unf, .nsf, .zip) albo obrazki (.png, .jpg)</p>
-<label class="b">Wybierz pliki<input id="f" type="file" multiple hidden></label></div>
-<div id="msg"></div>
+<label class="b">Dodaj pliki do listy<input id="f" type="file" multiple hidden></label></div>
+<h2 style="font-size:18px">Do wgrania</h2>
+<table id="q"></table>
+<p><button id="go" disabled>Wgraj do emulatora</button> <span id="msg"></span></p>
+<h2 style="font-size:18px">Na karcie</h2>
 <table>%(rows)s</table>
 <script>
-const msg=document.getElementById('msg');
-async function send(files){for(const f of files){msg.textContent='Wysyłam '+f.name+'…';
+const msg=document.getElementById('msg'),q=document.getElementById('q'),go=document.getElementById('go');
+let queue=[];
+function show(){q.innerHTML='';queue.forEach((f,i)=>{const r=q.insertRow();r.insertCell().textContent=f.name;
+const s=r.insertCell();s.className='s';s.textContent=Math.ceil(f.size/1024)+' KB';
+const c=r.insertCell();c.className='s';const b=document.createElement('button');b.className='del';
+b.textContent='Usuń z listy';b.onclick=()=>{queue.splice(i,1);show()};c.appendChild(b)});
+if(!queue.length){const r=q.insertRow();const c=r.insertCell();c.style.color='#8d9db2';c.textContent='Lista jest pusta'}
+go.disabled=!queue.length}
+function add(files){for(const f of files){if(!queue.some(x=>x.name==f.name))queue.push(f)}show()}
+go.onclick=async()=>{go.disabled=true;for(let i=0;i<queue.length;i++){const f=queue[i];
+msg.textContent='Wgrywam '+(i+1)+' z '+queue.length+': '+f.name+'…';
 const r=await fetch('/upload/'+encodeURIComponent(f.name),{method:'PUT',body:f});
-if(!r.ok){msg.textContent='Nie udało się: '+f.name+' ('+await r.text()+')';return}}
-msg.textContent='Gotowe';location.reload()}
-document.getElementById('f').onchange=e=>send(e.target.files);
+if(!r.ok){msg.textContent='Nie udało się: '+f.name+' ('+await r.text()+')';go.disabled=false;return}}
+msg.textContent='Wgrane';queue=[];setTimeout(()=>location.reload(),700)};
+const fi=document.getElementById('f');fi.onchange=e=>{add(e.target.files);fi.value=''};
 const d=document.getElementById('drop');
 d.ondragover=e=>{e.preventDefault();d.classList.add('on')};d.ondragleave=()=>d.classList.remove('on');
-d.ondrop=e=>{e.preventDefault();d.classList.remove('on');send(e.dataTransfer.files)};
-async function del(n){if(!confirm('Usunąć '+n+'?'))return;
+d.ondrop=e=>{e.preventDefault();d.classList.remove('on');add(e.dataTransfer.files)};
+async function del(n){if(!confirm('Usunąć z karty '+n+'?'))return;
 await fetch('/delete/'+encodeURIComponent(n),{method:'POST'});location.reload()}
+show();
 </script></main></body></html>"""
 
 
