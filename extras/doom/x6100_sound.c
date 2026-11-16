@@ -22,7 +22,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <tinyalsa/asoundlib.h>
@@ -78,6 +80,94 @@ static struct pcm *pcm;
 static unsigned rate;
 static boolean sfx_prefix;
 static FILE *test_out;          /* DOOM_TEST_PCM=file: the PC test writes the sound there */
+
+/* The sound as OpenX6X00 plays it, which plays on this radio without breaks: the donor's
+ * PulseAudio (timer-driven, a deep buffer), fed by its pacat from a pipe. Straight to the card
+ * only if that does not start */
+extern int doom_chroot_ready;
+static int pa_fifo = -1;
+static bool pa_on;
+static const char pa_script[] =
+	"exec >/tmp/doom-pa.log 2>&1\n"
+	"set -x\n"
+	"export PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/tmp/pahome XDG_RUNTIME_DIR=/tmp/parun\n"
+	"mkdir -p /tmp/pahome /tmp/parun; chmod 700 /tmp/parun\n"
+	"echo 'load-module module-alsa-sink device=hw:0,0 sink_name=doom tsched=1 rate=48000 channels=2' > /tmp/doom.pa\n"
+	"echo 'load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/doom-pulse' >> /tmp/doom.pa\n"
+	"pulseaudio -n -F /tmp/doom.pa --daemonize=no --exit-idle-time=-1 --disallow-exit --disable-shm=yes "
+	"--use-pid-file=no --log-target=stderr &\n"
+	"echo $! > /tmp/doom-pa.pid\n"
+	"i=0\n"
+	"while [ ! -S /tmp/doom-pulse ] && [ $i -lt 15 ]; do sleep 1; i=$((i+1)); done\n"
+	"exec pacat --server=unix:/tmp/doom-pulse --playback --raw --format=s16le --rate=48000 --channels=2 "
+	"--latency-msec=60 --stream-name=Doom /tmp/doom-audio\n";
+
+static bool pa_start(void)
+{
+	FILE *f = fopen("/bt/tmp/doom-pa.sh", "w");
+	if (!f)
+		return false;
+	fputs(pa_script, f);
+	fclose(f);
+	unlink("/bt/tmp/doom-audio");
+	if (mkfifo("/bt/tmp/doom-audio", 0666) != 0)
+		return false;
+	pid_t pid = fork();
+	if (pid == 0) {
+		int null = open("/dev/null", O_RDWR);
+		if (null >= 0) { dup2(null, 0); dup2(null, 1); dup2(null, 2); }
+		if (chroot("/bt") == 0 && chdir("/") == 0)
+			execl("/bin/sh", "sh", "/tmp/doom-pa.sh", (char *)NULL);
+		_exit(1);
+	}
+	return pid > 0;
+}
+
+static bool pa_open_fifo(void)
+{
+	for (int i = 0; i < 150 && running; i++) {
+		int fd = open("/bt/tmp/doom-audio", O_WRONLY | O_NONBLOCK);
+		if (fd >= 0) {
+			fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+			fcntl(fd, 1031 /* F_SETPIPE_SZ */, 4096);
+			pa_fifo = fd;
+			fprintf(stderr, "sound: through PulseAudio (the donor's, as OpenX6X00 plays)\n");
+			return true;
+		}
+		usleep(100000);
+	}
+	return false;
+}
+
+static bool open_card(void);
+
+/* PulseAudio given up: stopped, the card opened straight */
+static void pa_give_up(const char *why)
+{
+	fprintf(stderr, "sound: PulseAudio %s: the card straight\n", why);
+	if (pa_fifo >= 0) { close(pa_fifo); pa_fifo = -1; }
+	pa_on = false;
+	FILE *f = fopen("/bt/tmp/doom-pa.pid", "r");
+	int pid = 0;
+	if (f) { if (fscanf(f, "%d", &pid) != 1) pid = 0; fclose(f); }
+	if (pid > 1) { kill(pid, SIGTERM); usleep(500000); kill(pid, SIGKILL); }
+	open_card();
+}
+
+static bool pa_write(const int16_t *out, size_t bytes)
+{
+	const char *p = (const char *)out;
+	while (bytes) {
+		ssize_t w = write(pa_fifo, p, bytes);
+		if (w < 0) {
+			if (errno == EINTR) continue;
+			return false;
+		}
+		p += w;
+		bytes -= (size_t)w;
+	}
+	return true;
+}
 
 /* ------------------------------------------------------------------------------------------ */
 /* The codec's mixer, as OpenX6X00 leaves it                                                   */
@@ -197,6 +287,8 @@ static void *mix_thread(void *arg)
 {
 	(void)arg;
 	static int16_t out[PERIOD * 2], music[PERIOD * 2];
+	if (pa_on && !pa_open_fifo())
+		pa_give_up("did not start in 15 s");
 	while (running) {
 		int32_t acc[PERIOD * 2];
 		memset(acc, 0, sizeof acc);
@@ -234,6 +326,11 @@ static void *mix_thread(void *arg)
 			fwrite(out, sizeof out, 1, test_out);
 			fflush(test_out);
 			usleep(PERIOD * 1000000u / rate);
+		} else if (pa_fifo >= 0) {
+			if (!pa_write(out, sizeof out))
+				pa_give_up(strerror(errno));
+		} else if (!pcm) {
+			usleep(PERIOD * 1000000u / 48000u);
 		} else if (pcm_writei(pcm, out, PERIOD) < 0) {
 			x6100_xruns++;
 			pcm_prepare(pcm);                 /* an underrun: on again */
@@ -245,9 +342,37 @@ static void *mix_thread(void *arg)
 /* ------------------------------------------------------------------------------------------ */
 /* Doom's sound module                                                                        */
 /* ------------------------------------------------------------------------------------------ */
-static boolean snd_init(boolean use_sfx_prefix)
+/* The card straight (no PulseAudio): a start with 3 periods in */
+static bool open_card(void)
 {
 	static const unsigned rates[] = {48000, 44100, 32000, 22050, 16000};
+	for (size_t i = 0; i < sizeof rates / sizeof rates[0] && !pcm; i++) {
+		struct pcm_config cfg = {
+			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 4,
+			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD * 3,
+		};
+		struct pcm *p = pcm_open(0, 0, PCM_OUT, &cfg);
+		if (p && pcm_is_ready(p)) {
+			pcm = p;
+			rate = rates[i];
+		} else if (p) {
+			fprintf(stderr, "sound: %u Hz: %s\n", rates[i], pcm_get_error(p));
+			pcm_close(p);
+		}
+	}
+	if (!pcm) {
+		fprintf(stderr, "sound: no PCM output opened\n");
+		return false;
+	}
+	if (pcm) {
+		fprintf(stderr, "sound: the card straight at %u Hz\n", rate);
+		x6100_sound_rate = rate;
+	}
+	return pcm != NULL;
+}
+
+static boolean snd_init(boolean use_sfx_prefix)
+{
 	sfx_prefix = use_sfx_prefix;
 	const char *test = getenv("DOOM_TEST_PCM");
 	if (test && (test_out = fopen(test, "wb"))) {
@@ -267,21 +392,12 @@ static boolean snd_init(boolean use_sfx_prefix)
 		else
 			fprintf(stderr, "  /proc/asound/cards: none\n");
 	}
-	for (size_t i = 0; i < sizeof rates / sizeof rates[0] && !pcm; i++) {
-		struct pcm_config cfg = {
-			.channels = 2, .rate = rates[i], .period_size = PERIOD, .period_count = 4,
-			.format = PCM_FORMAT_S16_LE, .start_threshold = PERIOD,
-		};
-		struct pcm *p = pcm_open(0, 0, PCM_OUT, &cfg);
-		if (p && pcm_is_ready(p)) {
-			pcm = p;
-			rate = rates[i];
-		} else if (p) {
-			fprintf(stderr, "sound: %u Hz: %s\n", rates[i], pcm_get_error(p));
-			pcm_close(p);
-		}
-	}
-	if (!pcm) {
+	signal(SIGPIPE, SIG_IGN);              /* pacat gone: a write error, not the end */
+	if (doom_chroot_ready && pa_start()) {
+		pa_on = true;
+		rate = 48000;
+		fprintf(stderr, "sound: starting PulseAudio\n");
+	} else if (!open_card()) {
 		fprintf(stderr, "sound: no PCM output opened\n");
 		return false;
 	}

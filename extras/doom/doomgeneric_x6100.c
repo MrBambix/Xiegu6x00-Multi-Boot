@@ -217,6 +217,7 @@ static void close_log(void)
 	if (log_fp) {
 		log_file("Bluetooth script", "/bt/tmp/doom-bt.log", 8000);
 		log_file("bluetoothd", "/bt/tmp/bluetoothd.log", 8000);
+		log_file("Sound (PulseAudio, pacat)", "/bt/tmp/doom-pa.log", 6000);
 		log_usb_devices();
 		log_dmesg();
 		logmsg("end");
@@ -1004,13 +1005,10 @@ static const char bt_script[] =
 	"done\n"
 	"wait\n";
 
+int doom_chroot_ready;                   /* /bt: the donor's root for its programs (BlueZ, PulseAudio) */
+
 static void start_bluetooth(void)
 {
-	if (!bluetooth_on) {
-		logmsg("Bluetooth: off in doom.txt");
-		return;
-	}
-	logmsg("Bluetooth: starting the donor's BlueZ");
 	/* the chip's firmware, for a driver probing outside the chroot */
 	FILE *fw = fopen("/sys/module/firmware_class/parameters/path", "w");
 	if (fw) {
@@ -1035,6 +1033,12 @@ static void start_bluetooth(void)
 	mount("tmpfs", "/bt/tmp", "tmpfs", 0, "size=8m");
 	/* the pairings: DATA, where the lending system keeps their copy (/mnt/backups) */
 	mount("/dev/mmcblk0p3", "/bt/mnt", "vfat", MS_RDONLY, NULL);
+	doom_chroot_ready = 1;
+	if (!bluetooth_on) {
+		logmsg("Bluetooth: off in doom.txt");
+		return;
+	}
+	logmsg("Bluetooth: starting the donor's BlueZ");
 	FILE *f = fopen("/bt/tmp/doom-bt.sh", "w");
 	if (!f)
 		return;

@@ -1679,7 +1679,7 @@ static void draw_bt_sign(int x, int y, uint32_t c)
  * keyboard, the mouse, Bluetooth alone when it is on with no pad on it */
 static int status_chips(int right, int y)
 {
-	struct { char text[40]; uint32_t col; bool sign; } chips[6];
+	struct { char text[40]; uint32_t col; bool sign; int bat; } chips[6];
 	int n = 0;
 	bool kb = false, mouse = false, bt_pad = false;
 	for (int i = 0; i < n_devs && n < 2; i++) {
@@ -1688,13 +1688,8 @@ static int status_chips(int right, int y)
 		const char *kind = devs[i].profile ? devs[i].profile : "";
 		bool plain = !kind[0] || !strcmp(kind, "USB") || !strcmp(kind, "ogólny") || !strcmp(kind, "generic");
 		int bat = bt_battery(devs[i].uniq);
-		if (bat >= 0)
-			snprintf(chips[n].text, sizeof chips[n].text, plain ? "Pad%s %d%%" : "Pad %s %d%%", plain ? "" : kind, bat);
-		else
-			snprintf(chips[n].text, sizeof chips[n].text, plain ? "Pad%s" : "Pad %s", plain ? "" : kind);
-		if (bat >= 0 && bat <= 15)
-			chips[n].col = C_RED;
-		else
+		snprintf(chips[n].text, sizeof chips[n].text, plain ? "Pad%s" : "Pad %s", plain ? "" : kind);
+		chips[n].bat = bat;
 		chips[n].col = C_ACCENT;
 		chips[n].sign = devs[i].bus == BUS_BLUETOOTH;
 		bt_pad |= chips[n].sign;
@@ -1704,14 +1699,18 @@ static int status_chips(int right, int y)
 		kb |= devs[i].role == ROLE_KEYBOARD;
 		mouse |= devs[i].role == ROLE_MOUSE;
 	}
-	if (kb) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("Klawiatura", "Keyboard")); chips[n].col = C_TEXT; chips[n++].sign = false; }
-	if (mouse) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("Mysz", "Mouse")); chips[n].col = C_TEXT; chips[n++].sign = false; }
-	if (bt_powered == 0) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("wył.", "off")); chips[n].col = C_DIM; chips[n++].sign = true; }
-	else if (bt_powered > 0 && !bt_pad) { chips[n].text[0] = 0; chips[n].col = C_BLUE; chips[n++].sign = true; }
+	if (kb) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("Klawiatura", "Keyboard")); chips[n].col = C_TEXT; chips[n].bat = -1; chips[n++].sign = false; }
+	if (mouse) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("Mysz", "Mouse")); chips[n].col = C_TEXT; chips[n].bat = -1; chips[n++].sign = false; }
+	if (bt_powered == 0) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("wył.", "off")); chips[n].col = C_DIM; chips[n].bat = -1; chips[n++].sign = true; }
+	else if (bt_powered > 0 && !bt_pad) { chips[n].text[0] = 0; chips[n].col = C_BLUE; chips[n].bat = -1; chips[n++].sign = true; }
 	int x = right;
 	for (int i = n - 1; i >= 0; i--) {
 		int tw = chips[i].text[0] ? text_w(F_SMALL, chips[i].text) : 0;
-		int w = tw + 18 + (chips[i].sign ? (tw ? 20 : 14) : 0);
+		char pc[8] = "";
+		if (chips[i].bat >= 0)
+			snprintf(pc, sizeof pc, "%d%%", chips[i].bat);
+		int bw = pc[0] ? 30 + text_w(F_SMALL, pc) : 0;
+		int w = tw + 18 + (chips[i].sign ? (tw ? 20 : 14) : 0) + bw;
 		x -= w;
 		box(x, y, w, 24, 12, C_BAR, C_LINE);
 		int tx = x + 9;
@@ -1721,6 +1720,17 @@ static int status_chips(int right, int y)
 		}
 		if (tw)
 			draw_text(tx, y + 3, F_SMALL, chips[i].col, chips[i].text);
+		if (pc[0]) {                              /* a battery: its outline, its fill, the per cent */
+			int bx = tx + tw + 8, by = y + 7, low = chips[i].bat <= 15;
+			uint32_t bc = low ? C_RED : C_TEXT;
+			rrect(bx, by, 18, 10, 2, bc);
+			rrect(bx + 1, by + 1, 16, 8, 2, C_BAR);
+			fill(bx + 18, by + 3, 2, 4, bc);
+			int fw = 14 * chips[i].bat / 100;
+			if (fw < 1) fw = 1;
+			fill(bx + 2, by + 2, fw, 6, low ? C_RED : C_ACCENT);
+			draw_text(bx + 24, y + 3, F_SMALL, low ? C_RED : C_TEXT, pc);
+		}
 		x -= 8;
 	}
 	return right - x;
@@ -2536,6 +2546,8 @@ static void game_to_canvas(void)
 	}
 }
 
+static int osd_x, osd_w;                    /* the bubble over the game: its place */
+
 /* The game's picture straight onto the screen */
 static void draw_game(void)
 {
@@ -2563,7 +2575,17 @@ static void draw_game(void)
 						colbuf[y++] = p;
 				}
 			}
-			memcpy((uint32_t *)(fb + (fb_h - 1 - lx) * fb_stride) + gy0, colbuf, (size_t)gh * 4);
+			uint32_t *row = (uint32_t *)(fb + (fb_h - 1 - lx) * fb_stride) + gy0;
+			if (osd_w && (int)lx >= osd_x && (int)lx < osd_x + osd_w && gy0 < 42) {
+				int a = 6 - gy0, b = 42 - gy0;         /* the bubble's rows in the game's */
+				if (a < 0) a = 0;
+				if (a > 0)
+					memcpy(row, colbuf, (size_t)a * 4);
+				if (b < gh)
+					memcpy(row + b, colbuf + b, (size_t)(gh - b) * 4);
+			} else {
+				memcpy(row, colbuf, (size_t)gh * 4);
+			}
 		}
 		return;
 	}
@@ -2571,6 +2593,8 @@ static void draw_game(void)
 		unsigned sx = map_x[x];
 		for (int y = 0; y < gh; y++) {
 			unsigned fx, fy;
+			if (osd_w && gx0 + x >= osd_x && gx0 + x < osd_x + osd_w && gy0 + y >= 6 && gy0 + y < 42)
+				continue;
 			land_to_fb((unsigned)(gx0 + x), (unsigned)(gy0 + y), &fx, &fy);
 			put(fx, fy, src_px(sx, map_y[y]));
 		}
@@ -3613,11 +3637,19 @@ static void bt_pads_off(void)
 		}
 	if (!any)
 		return;
+	/* until each says it is gone (4 s at most): the radio's power going first would only cut the
+	 * link, and a pad keeps looking for it a while */
 	uint32_t t0 = now_ms();
-	while (now_ms() - t0 < 1500) {
+	while (now_ms() - t0 < 4000) {
 		bt_poll();
+		bool left = false;
+		for (int i = 0; i < n_btd; i++)
+			left |= btd[i].connected;
+		if (!left && now_ms() - t0 > 300)
+			break;
 		usleep(50000);
 	}
+	logmsg("bt: pads let go in %u ms", now_ms() - t0);
 }
 
 /* A Bluetooth pad's battery in per cent by its address (the input device's "uniq"); -1: not known */
@@ -4189,19 +4221,78 @@ static bool state_exists(int slot)
 	return access(path, R_OK) == 0;
 }
 
+/* The game's menu: a row of small picture tiles over the darkened game */
+static const char *gm_icons[M_N][12] = {
+	{"............", "...#........", "...###......", "...#####....", "...#######..", "...########.",
+	 "...########.", "...#######..", "...#####....", "...###......", "...#........", "............"},
+	{"............", "#.....#....#", "#....##...##", "#...###..###", "#..####.####", "#.##########",
+	 "#.##########", "#..####.####", "#...###..###", "#....##...##", "#.....#....#", "............"},
+	{"############", "#..........#", "#.##....##.#", "#.#......#.#", "#..........#", "#..........#",
+	 "#..........#", "#..........#", "#.#......#.#", "#.##....##.#", "#..........#", "############"},
+	{"##########..", "#.#....#.##.", "#.#....#..##", "#.######...#", "#..........#", "#..........#",
+	 "#.########.#", "#.#......#.#", "#.#......#.#", "#.#......#.#", "#.#......#.#", "############"},
+	{".....##.....", ".....##.....", ".....##.....", ".....##.....", "..########..", "...######...",
+	 "....####....", ".....##.....", "#..........#", "#..........#", "#..........#", "############"},
+	{"............", "##.########.", "##.########.", "............", "##.########.", "##.########.",
+	 "............", "##.########.", "##.########.", "............", "............", "............"},
+	{".....##.....", "..#..##..#..", ".##..##..##.", "##...##...##", "#....##....#", "#..........#",
+	 "#..........#", "##........##", ".##......##.", "..########..", "...######...", "............"},
+};
+static const uint32_t gm_cols[M_N] = {0x2fbf74, 0x3d82d6, 0x7b5cb0, 0xc9922e, 0x2a9d8f, 0x5a6b85, 0xc8414c};
+static int gm_sel;
+
 static int game_menu(void)
 {
-	const char *pic = set_aspect == 2 ? T("Obraz: cały ekran", "Picture: the whole screen")
-	                  : set_aspect ? T("Obraz: 4:3", "Picture: 4:3") : T("Obraz: 2x (ostry)", "Picture: 2x (sharp)");
-	const char *items[M_N] = {
-		T("Wróć do gry", "Back to the game"), T("Zacznij grę od nowa", "Start the game again"), pic,
-		T("Zapisz stan", "Save state"),
-		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
-		T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
-		T("Wyłącz radio", "Switch the radio off"),
+	const char *labels[M_N] = {
+		T("Graj", "Play"), T("Od nowa", "Restart"),
+		set_aspect == 2 ? T("Pełny", "Full") : set_aspect ? "4:3" : "2x",
+		T("Zapisz", "Save"), state_exists(0) ? T("Wczytaj", "Load") : T("(brak)", "(none)"),
+		T("Wyjdź", "Exit"), T("Wyłącz", "Off"),
 	};
-	int c = menu(cur_base, items, M_N, 0, T("MFK / F1 / A: wybierz  GEN: wróć do gry", "MFK / F1 / A: choose  GEN: back to the game"), true);
-	return c < 0 ? M_RESUME : c;
+	int sel = gm_sel;
+	gm_sel = 0;
+	dim(0, 0, LAND_W, LAND_H, 90);
+	const int tw = 96, gap = 10, py = LAND_H - 186, px = 20, pw = LAND_W - 40, ph = 176;
+	const int tx0 = (LAND_W - (M_N * tw + (M_N - 1) * gap)) / 2, ty = py + 44;
+	bool dirty = true;
+	input_settle();
+	menu_depth++;
+	for (;;) {
+		poll_input();
+		enum nav k;
+		while ((k = nav_pop()) != N_NONE) {
+			dirty = true;
+			if (k == N_RIGHT || k == N_DOWN || k == N_DOWNF || k == N_PGDN) sel = (sel + 1) % M_N;
+			else if (k == N_LEFT || k == N_UP || k == N_UPF || k == N_PGUP) sel = (sel + M_N - 1) % M_N;
+			else if (k == N_OK) { menu_depth--; input_settle(); return sel; }
+			else if (k == N_BACK || k == N_MENU) { menu_depth--; input_settle(); return M_RESUME; }
+		}
+		want_menu = false;
+		if (dirty) {
+			dirty = false;
+			rrect_a(px + 4, py + 6, pw, ph, 18, 0x000000, 120);
+			box(px, py, pw, ph, 18, C_PANEL, C_LINE);
+			draw_text_fit(px + 22, py + 9, F_LIST, C_TEXT, cur_base, pw - 44, false);
+			for (int i = 0; i < M_N; i++) {
+				int x = tx0 + i * (tw + gap);
+				bool on = i == sel;
+				if (on)
+					rrect(x - 4, ty - 4, tw + 8, tw + 8, 14, 0xa8f5cd);
+				rrect(x, ty, tw, tw, 11, on ? gm_cols[i] : mix(C_PANEL2, gm_cols[i], 70));
+				for (int r = 0; r < 12; r++)
+					for (int c = 0; c < 12; c++)
+						if (gm_icons[i][r][c] == '#')
+							fill(x + 24 + c * 4, ty + 12 + r * 4, 4, 4, on ? 0xffffff : 0xdfe6f0);
+				int lw = text_w(F_SMALL, labels[i]);
+				draw_text(x + (tw - lw) / 2, ty + 68, F_SMALL, on ? 0xffffff : C_TEXT, labels[i]);
+			}
+			key_chips(px + 22, py + ph - 30, px + pw - 10,
+			          T("MFK / ◀ ▶: wybór  MFK / F1 / A: OK  GEN / B: gra", "MFK / ◀ ▶: choose  MFK / F1 / A: OK  GEN / B: game"));
+			present(0, 0, LAND_W, LAND_H);
+		}
+		if (test_mode && !keys_scripted()) { menu_depth--; return sel; }
+		idle(10);
+	}
 }
 
 /* How to play, on one screen */
@@ -4248,12 +4339,19 @@ static void game_to_canvas_rect(int rx, int ry, int rw, int rh)
 
 /* A word in a bubble over the game: only the bubble's own place is touched (the game's picture
  * under its round corners), so nothing black runs beside it */
-static int osd_x, osd_w;
+static char osd_text[96];
 static void osd(const char *msg)
 {
 	int w = text_w(F_BODY, msg) + 48;
 	if (w > LAND_W - 20) w = LAND_W - 20;
 	int x = (LAND_W - w) / 2;
+	if (osd_w && !strcmp(osd_text, msg) && x == osd_x)
+		return;                               /* as it is: the game leaves its place alone */
+	if (osd_w && (x != osd_x || w != osd_w)) {   /* the old one's place back first */
+		game_to_canvas_rect(osd_x, 6, osd_w, 36);
+		present(osd_x, 6, osd_w, 36);
+	}
+	snprintf(osd_text, sizeof osd_text, "%s", msg);
 	osd_x = x;
 	osd_w = w;
 	game_to_canvas_rect(x, 6, w, 36);
@@ -4268,9 +4366,11 @@ static void osd_clear(void)
 {
 	if (!osd_w)
 		return;
-	game_to_canvas_rect(osd_x, 6, osd_w, 36);
-	present(osd_x, 6, osd_w, 36);
+	int x = osd_x, w = osd_w;
 	osd_w = 0;
+	osd_text[0] = 0;
+	game_to_canvas_rect(x, 6, w, 36);
+	present(x, 6, w, 36);
 }
 
 
@@ -4376,6 +4476,7 @@ static void play(int idx)
 			case M_ASPECT:                    /* the next size, at once; the menu again */
 				set_aspect = (set_aspect + 1) % 3;
 				sound_save();
+				gm_sel = M_ASPECT;
 				mapped_w = 0;                 /* the maps made again */
 				want_menu = true;
 				break;
