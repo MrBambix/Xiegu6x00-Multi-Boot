@@ -15,6 +15,7 @@ found = [
     ("BB:00:00:00:00:04", dict(name="Telefon Ani", icon="phone")),
 ]
 waiting = {}
+removed = set()
 out = sys.stdout
 
 
@@ -41,7 +42,8 @@ def scan():
                 if not devs[mac]["paired"]:
                     say("[\x1b[0;93mCHG\x1b[0m] Device %s RSSI: -%d" % (mac, 60 + i))
                 return
-            devs[mac] = dict(name=d["name"], icon=d["icon"], paired=False, conn=False, trusted=False)
+            devs[mac] = dict(name=d["name"], icon=d["icon"], paired=False, conn=False, trusted=False,
+                             fresh=mac in removed)
             say("[\x1b[0;92mNEW\x1b[0m] Device %s %s" % (mac, d["name"] or mac.replace(":", "-")))
             say("[\x1b[0;93mCHG\x1b[0m] Device %s RSSI: -%d" % (mac, 50 + i))
         later(0.6 + i * 0.5, one)
@@ -53,6 +55,9 @@ def pair(mac):
         say("Device %s not available" % mac)
         return
     say("Attempting to pair with %s" % mac)
+    if mac == "BB:00:00:00:00:01" and not d.get("fresh"):     # an old bond on the pad's side: refused
+        later(1.0, lambda: say("Failed to pair: org.bluez.Error.AuthenticationFailed"))
+        return
 
     def ok():
         d["paired"] = True
@@ -109,6 +114,14 @@ def main():
                 scan()
             else:
                 say("Discovery stopped")
+        elif c == "remove":
+            if a in devs:
+                del devs[a]
+                removed.add(a)
+                say("[\x1b[0;91mDEL\x1b[0m] Device %s %s" % (a, a.replace(":", "-")))
+                say("Device has been removed")
+            else:
+                say("Device %s not available" % a)
         elif c == "pair":
             pair(a)
         elif c == "cancel-pairing":

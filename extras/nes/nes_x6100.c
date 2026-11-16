@@ -2555,6 +2555,8 @@ static const char bt_script[] =
 	"if [ -f /nes-bt/pairings.tar ]; then mkdir -p /var/lib/bluetooth; tar -C /var/lib/bluetooth -xf /nes-bt/pairings.tar; fi\n"
 	/* the devices forgotten in the emulator: gone again (the lending system's own copy keeps them) */
 	"if [ -f /nes-bt/forgotten.txt ]; then for mac in $(cat /nes-bt/forgotten.txt); do rm -rf /var/lib/bluetooth/*/$mac; done; fi\n"
+	/* older Xbox pads (classic Bluetooth) connect only with ERTM off, as on any Linux */
+	"echo 1 > /sys/module/bluetooth/parameters/disable_ertm 2>/dev/null\n"
 	"dbus-uuidgen --ensure 2>/dev/null\n"
 	"dbus-daemon --system\n"
 	"sleep 1\n"
@@ -2816,6 +2818,8 @@ static bool bt_in_ctrl;               /* inside a "show" block */
 static uint32_t bt_retry;
 /* what is under way: a pairing, a connection */
 enum { OP_NONE, OP_PAIR, OP_CONNECT, OP_DISCONNECT };
+static bool bt_agent_default;
+static void bt_send(const char *fmt, ...);
 static int op_kind, op_state;         /* op_state: 0 none, 1 waiting, 2 done, 3 failed */
 static char op_mac[18], op_err[120], op_code[16];
 
@@ -3021,11 +3025,17 @@ static void bt_line(char *line)
 		}
 		return;
 	}
+	/* our agent as the default one: asked for too early (bluetoothctl not yet with the daemon)
+	 * it was refused, so once more when the agent is there */
+	if (strstr(s, "Agent registered") && !bt_agent_default) {
+		bt_agent_default = true;
+		bt_send("default-agent");
+	}
 	if (op_state == 1) {
 		if (op_kind == OP_PAIR && strstr(s, "Pairing successful"))
 			op_state = 2;
 		else if (op_kind == OP_PAIR && (p = strstr(s, "Failed to pair"))) {
-			op_state = strstr(s, "AlreadyExists") ? 2 : 3;
+			op_state = 3;                         /* AlreadyExists too: an old bond, to be dropped */
 			snprintf(op_err, sizeof op_err, "%.119s", p);
 		} else if (op_kind == OP_CONNECT && strstr(s, "Connection successful"))
 			op_state = 2;
@@ -3300,10 +3310,41 @@ static void bt_pair(const char *mac)
 	bt_start(OP_PAIR, mac);
 	bt_send("pair %s", mac);
 	bool ok = bt_wait(T("Parowanie", "Pairing"), name, 40, true);
+	if (!ok && (strstr(op_err, "Authentication") || strstr(op_err, "AlreadyExists")) && !strstr(op_err, "Timeout")) {
+		/* refused: mostly an old bond on one side (the pad paired here before and since with
+		 * something else, or the other way round). Forgotten, found again, paired afresh */
+		logmsg("bt: pairing %s refused (%s): the old bond dropped, once more", mac, op_err);
+		bt_send("remove %s", mac);
+		if (d) d->seen = d->paired = false;
+		bt_send("scan on");
+		uint32_t t0 = now_ms();
+		for (;;) {
+			const char *l[] = {name, T("Odrzucone: zapominam stare parowanie i próbuję jeszcze raz…",
+			                           "Refused: forgetting the old pairing and trying once more…"),
+			                   T("Trzymaj pada w trybie parowania (szybkie miganie).",
+			                     "Keep the pad in pairing mode (fast blinking).")};
+			panel(T("Parowanie", "Pairing"), l, 3, -1);
+			poll_input();
+			while (nav_pop() != N_NONE)
+				;
+			idle(100);
+			d = bt_dev(mac, false);
+			if ((d && d->seen && now_ms() - t0 > 1500) || now_ms() - t0 > 12000)
+				break;
+		}
+		bt_send("scan off");
+		bt_start(OP_PAIR, mac);
+		bt_send("pair %s", mac);
+		ok = bt_wait(T("Parowanie", "Pairing"), name, 40, true);
+	}
 	logmsg("bt: pairing %s: %s %s", mac, ok ? "ok" : "failed", op_err);
 	if (!ok) {
-		const char *l[] = {name, T("Nie udało się sparować:", "Pairing failed:"), bt_reason(op_err)};
-		message("Bluetooth", l, 3, 0);
+		const char *l[] = {name, T("Nie udało się sparować:", "Pairing failed:"), bt_reason(op_err), "",
+		                   T("Pad: przytrzymaj przycisk parowania ok. 3 s, aż zacznie szybko migać,",
+		                     "A pad: hold its pairing button about 3 s, until it blinks fast,"),
+		                   T("i wyłącz konsolę lub komputer, z którym był sparowany.",
+		                     "and switch off the console or computer it was paired with.")};
+		message("Bluetooth", l, 6, 0);
 		return;
 	}
 	d = bt_dev(mac, true);

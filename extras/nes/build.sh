@@ -127,12 +127,14 @@ PY
     T=$W/pctest && mkdir -p "$T/roms" "$T/in" && cp "$W/test.nes" "$T/roms/"
     (cd "$T" && NES_TEST_LOG="$T/bt.log" NES_TEST_FB=480x800 NES_TEST_ROMS="$T/roms" \
         NES_TEST_BTCTL="$HERE/test/fake_bluetoothctl.py" \
-        NES_TEST_KEYS="wwwdowowwwwwwwwwowwwwwwwowwowwwwwwwwwowwwwwwwwwwwwowwdowwwowowwwbbbbb" \
+        NES_TEST_KEYS="wwwdowowwwwwwwwwowwwwwwwwwwwwwwwwwowwowwwwwwwwwowwwwwwwwwwwwowwdowwwowowwwbbbbb" \
         timeout 120 "$W/nes-pc")
     grep -q "Confirm passkey 123456 (yes/no):  (answered)" "$T/bt.log"
     test "$(grep -c 'bt: pairing BB:00:00:00:00:0[12]: ok' "$T/bt.log")" = 2
     grep -q "bt> connect AA:00:00:00:00:01" "$T/bt.log"
-    echo "PC test Bluetooth: pairing with a confirmation and with a keyboard code, connecting: ok"
+    grep -q "bt: pairing BB:00:00:00:00:01 refused" "$T/bt.log"    # an old bond: dropped, paired afresh
+    grep -q "bt> remove BB:00:00:00:00:01" "$T/bt.log"
+    echo "PC test Bluetooth: a refused pairing tried afresh, a confirmation, a keyboard code, connecting: ok"
     # Pads, keyboard, mouse from FIFOs: the bits each gives, Select+Start as the menu, a pad's
     # buttons learnt (an analog trigger at rest taken for none)
     for f in pad kbd mouse; do mkfifo "$T/in/$f"; done
