@@ -165,7 +165,12 @@ PAGE = """<!doctype html><html lang="pl"><head><meta charset="utf-8">
 body{margin:0;font-family:system-ui,sans-serif;background:#0d1522;color:#eef3f8}
 main{max-width:760px;margin:0 auto;padding:20px}
 h1{font-size:24px;margin:0 0 4px}.sub{color:#8d9db2;margin:0 0 18px}
-.drop{border:2px dashed #34c77b;border-radius:14px;padding:26px;text-align:center;margin-bottom:18px}
+.drop{border:1px solid #2a3a52;background:#111a28;border-radius:14px;padding:14px;margin-bottom:22px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.b2{background:#24344d;color:#eef3f8}.hint{color:#8d9db2;font-size:13px;margin-left:6px}
+.box{background:#0a101a;border:1px solid #2a3a52;border-radius:10px;height:260px;overflow:auto}
+.box tr{cursor:pointer}.box tr.on td{background:#1f5a3c}.empty{color:#8d9db2;text-align:center;padding:30px}
+.foot{display:flex;justify-content:space-between;align-items:center;margin:12px 0 0}#cnt{color:#8d9db2}
 .drop.on{background:#123524}
 button,label.b{background:#34c77b;color:#05140b;border:0;border-radius:10px;padding:10px 16px;
 font-weight:700;font-size:15px;cursor:pointer}
@@ -176,29 +181,40 @@ td.s{color:#8d9db2;text-align:right;white-space:nowrap}
 button:disabled{opacity:.4;cursor:default}
 </style></head><body><main>
 <h1>Gry NES na X6100</h1><p class="sub">%(n)d gier · wolne %(free)s MB na karcie</p>
-<div class="drop" id="drop"><p>Upuść tu pliki gier (.nes, .fds, .unf, .nsf, .zip) albo obrazki (.png, .jpg)</p>
-<label class="b">Dodaj pliki do listy<input id="f" type="file" multiple hidden></label></div>
-<h2 style="font-size:18px">Do wgrania</h2>
-<table id="q"></table>
-<p><button id="go" disabled>Wgraj do emulatora</button> <span id="msg"></span></p>
+<div class="drop" id="drop">
+<div class="bar"><label class="b">+ Pliki<input id="f" type="file" multiple hidden></label>
+<label class="b">+ Folder<input id="fd" type="file" webkitdirectory multiple hidden></label>
+<button class="b2" id="rm" disabled>− Usuń</button><span class="hint">albo upuść tu pliki</span></div>
+<div class="box"><table id="q"></table></div>
+<p class="foot"><span id="cnt">Pusto</span><button id="go" disabled>Wgraj do emulatora</button></p>
+<p id="msg"></p></div>
 <h2 style="font-size:18px">Na karcie</h2>
 <table>%(rows)s</table>
 <script>
-const msg=document.getElementById('msg'),q=document.getElementById('q'),go=document.getElementById('go');
-let queue=[];
-function show(){q.innerHTML='';queue.forEach((f,i)=>{const r=q.insertRow();r.insertCell().textContent=f.name;
-const s=r.insertCell();s.className='s';s.textContent=Math.ceil(f.size/1024)+' KB';
-const c=r.insertCell();c.className='s';const b=document.createElement('button');b.className='del';
-b.textContent='Usuń z listy';b.onclick=()=>{queue.splice(i,1);show()};c.appendChild(b)});
-if(!queue.length){const r=q.insertRow();const c=r.insertCell();c.style.color='#8d9db2';c.textContent='Lista jest pusta'}
-go.disabled=!queue.length}
-function add(files){for(const f of files){if(!queue.some(x=>x.name==f.name))queue.push(f)}show()}
-go.onclick=async()=>{go.disabled=true;for(let i=0;i<queue.length;i++){const f=queue[i];
+const EXT=['.nes','.fds','.unf','.unif','.nsf','.zip','.png','.jpg','.jpeg','.bmp'];
+const msg=document.getElementById('msg'),q=document.getElementById('q'),go=document.getElementById('go'),
+rm=document.getElementById('rm'),cnt=document.getElementById('cnt');
+let queue=[],sel=new Set();
+function show(){q.innerHTML='';queue.forEach((f,i)=>{const r=q.insertRow();if(sel.has(i))r.className='on';
+r.onclick=e=>{if(!e.ctrlKey&&!e.metaKey&&!e.shiftKey)sel.clear();sel.has(i)?sel.delete(i):sel.add(i);show()};
+r.insertCell().textContent=f.webkitRelativePath||f.name;const s=r.insertCell();s.className='s';
+s.textContent=Math.ceil(f.size/1024)+' KB'});
+if(!queue.length){const c=q.insertRow().insertCell();c.className='empty';c.textContent='Dodaj gry przyciskiem + albo upuść je tutaj'}
+const kb=Math.ceil(queue.reduce((a,f)=>a+f.size,0)/1024);
+cnt.textContent=queue.length?('Plików: '+queue.length+' · '+kb+' KB'):'Pusto';
+go.disabled=!queue.length;rm.disabled=!sel.size}
+function add(files){let skip=0;for(const f of files){const n=f.name.toLowerCase();
+if(!EXT.some(e=>n.endsWith(e))){skip++;continue}
+if(!queue.some(x=>x.name==f.name))queue.push(f)}
+msg.textContent=skip?('Pominięte (nie gry): '+skip):'';show()}
+rm.onclick=()=>{queue=queue.filter((f,i)=>!sel.has(i));sel.clear();show()};
+document.addEventListener('keydown',e=>{if(e.key=='Delete'&&sel.size)rm.onclick()});
+go.onclick=async()=>{go.disabled=true;rm.disabled=true;for(let i=0;i<queue.length;i++){const f=queue[i];
 msg.textContent='Wgrywam '+(i+1)+' z '+queue.length+': '+f.name+'…';
 const r=await fetch('/upload/'+encodeURIComponent(f.name),{method:'PUT',body:f});
 if(!r.ok){msg.textContent='Nie udało się: '+f.name+' ('+await r.text()+')';go.disabled=false;return}}
-msg.textContent='Wgrane';queue=[];setTimeout(()=>location.reload(),700)};
-const fi=document.getElementById('f');fi.onchange=e=>{add(e.target.files);fi.value=''};
+msg.textContent='Wgrane: '+queue.length;queue=[];setTimeout(()=>location.reload(),800)};
+for(const id of ['f','fd']){const el=document.getElementById(id);el.onchange=e=>{add(e.target.files);el.value=''}}
 const d=document.getElementById('drop');
 d.ondragover=e=>{e.preventDefault();d.classList.add('on')};d.ondragleave=()=>d.classList.remove('on');
 d.ondrop=e=>{e.preventDefault();d.classList.remove('on');add(e.dataTransfer.files)};
