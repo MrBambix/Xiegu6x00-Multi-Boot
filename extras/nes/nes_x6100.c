@@ -204,6 +204,7 @@ static void close_log(void)
 {
 	if (log_fp) {
 		log_file("Bluetooth script", "/bt/tmp/nes-bt.log", 8000);
+		log_file("Sound (PulseAudio, pacat)", "/bt/tmp/nes-pa.log", 6000);
 		log_file("input devices", "/proc/bus/input/devices", 12000);
 		log_dmesg();
 		logmsg("end");
@@ -2041,8 +2042,90 @@ static long fake_queued(void)
 	return (long)fake_written - (long)((now_us() - fake_t0) * 48486 / 1000000);
 }
 
+/* The sound as OpenX6X00 plays it, which plays on this radio without breaks: the lending
+ * system's PulseAudio on the card (timer-driven, a deep buffer, the card never left to run dry),
+ * fed by its pacat from a pipe. The card opened straight only if that cannot start */
+static bool chroot_ready;
+static pid_t run_chroot(const char *script, const char *name, const char *arg, const char *arg2);
+static int snd_fifo = -1;
+static bool snd_pulse;
+static const char *fifo_path = "/bt/tmp/nes-audio";
+static const char pa_script[] =
+	"exec >/tmp/nes-pa.log 2>&1\n"
+	"set -x\n"
+	"export PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/tmp/pahome XDG_RUNTIME_DIR=/tmp/parun\n"
+	"mkdir -p /tmp/pahome /tmp/parun; chmod 700 /tmp/parun\n"
+	"echo 'load-module module-alsa-sink device=hw:0,0 sink_name=nes tsched=1 rate=48000 channels=2' > /tmp/nes.pa\n"
+	"echo 'load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/nes-pulse' >> /tmp/nes.pa\n"
+	"pulseaudio -n -F /tmp/nes.pa --daemonize=no --exit-idle-time=-1 --disallow-exit --disable-shm=yes "
+	"--use-pid-file=no --log-target=stderr &\n"
+	"echo $! > /tmp/nes-pa.pid\n"
+	"i=0\n"
+	"while [ ! -S /tmp/nes-pulse ] && [ $i -lt 15 ]; do sleep 1; i=$((i+1)); done\n"
+	"exec pacat --server=unix:/tmp/nes-pulse --playback --raw --format=s16le --rate=48000 --channels=2 "
+	"--latency-msec=60 --stream-name=NES /tmp/nes-audio\n";
+
+static void sound_alsa(void);
+
+/* The pipe to pacat, once it reads (15 s at most) */
+static bool fifo_open(void)
+{
+	for (int i = 0; i < 150 && snd_running; i++) {
+		int fd = open(fifo_path, O_WRONLY | O_NONBLOCK);
+		if (fd >= 0) {
+			fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+			fcntl(fd, 1031 /* F_SETPIPE_SZ */, 4096);   /* a short pipe: little delay */
+			snd_fifo = fd;
+			logmsg("sound: through PulseAudio (the lending system's, as OpenX6X00 plays), pipe %d bytes",
+			       fcntl(fd, 1032 /* F_GETPIPE_SZ */));
+			return true;
+		}
+		usleep(100000);
+	}
+	return false;
+}
+
+/* PulseAudio given up: stopped, the card opened straight */
+static void pulse_give_up(const char *why)
+{
+	logmsg("sound: PulseAudio %s: the card opened straight", why);
+	if (snd_fifo >= 0) {
+		close(snd_fifo);
+		snd_fifo = -1;
+	}
+	snd_pulse = false;
+	FILE *f = fopen("/bt/tmp/nes-pa.pid", "r");
+	int pid = 0;
+	if (f) {
+		if (fscanf(f, "%d", &pid) != 1) pid = 0;
+		fclose(f);
+	}
+	if (pid > 1) {
+		kill(pid, SIGTERM);
+		usleep(500000);
+		kill(pid, SIGKILL);
+	}
+	if (!test_mode)
+		sound_alsa();
+}
+
 static int card_write(const int16_t *out)
 {
+	if (snd_fifo >= 0) {
+		const char *p = (const char *)out;
+		size_t left = PERIOD * 4;
+		while (left) {
+			ssize_t w = write(snd_fifo, p, left);
+			if (w < 0) {
+				if (errno == EINTR)
+					continue;
+				return -1;
+			}
+			p += w;
+			left -= (size_t)w;
+		}
+		return PERIOD;
+	}
 	if (pcm)
 		return pcm_writei(pcm, out, PERIOD);
 	if (fake_t0 && fake_queued() < 0) {           /* ran dry: stopped, to be filled again */
@@ -2070,6 +2153,8 @@ static void *snd_thread(void *arg)
 	static int16_t out[PERIOD * 2];
 	int16_t last = 0;
 	snd_since_us = now_us();
+	if (snd_pulse && !fifo_open())
+		pulse_give_up("did not start in 15 s");
 	while (snd_running) {
 		unsigned have = 0;
 		/* a whole period of the game's sound waited for (40 ms at most: a menu is open). The
@@ -2107,10 +2192,14 @@ static void *snd_thread(void *arg)
 		ring_r += have < PERIOD ? have : PERIOD;
 		pthread_mutex_unlock(&ring_lock);
 		int r = card_write(out);
-		if (r < 0) {                              /* ran dry: counted, made ready, filled again */
+		if (r < 0 && snd_fifo >= 0) {
+			pulse_give_up(strerror(errno));
+		} else if (r < 0 && pcm) {                /* ran dry: counted, made ready, filled again */
 			if (xruns++ < 5)
 				logmsg("sound: write: %s", pcm_get_error(pcm));
 			pcm_prepare(pcm);
+		} else if (r < 0) {
+			usleep(10000);
 		} else {
 			if (snd_writes++ == 0)
 				logmsg("sound: the first %d frames played", PERIOD);
@@ -2166,7 +2255,11 @@ static void sound_open(void)
 		const char *p = getenv("NES_TEST_PCM");
 		if (p)
 			test_pcm = fopen(p, "wb");
-		if (getenv("NES_TEST_SNDTHREAD")) {   /* the sound thread with a pretend card */
+		if (getenv("NES_TEST_FIFO")) {        /* a real pacat reading this pipe */
+			fifo_path = getenv("NES_TEST_FIFO");
+			snd_pulse = true;
+		}
+		if (getenv("NES_TEST_SNDTHREAD") || snd_pulse) {   /* the sound thread with a pretend card */
 			pthread_t t;
 			snd_running = true;
 			pthread_create(&t, NULL, snd_thread, NULL);
@@ -2175,6 +2268,43 @@ static void sound_open(void)
 		return;
 	}
 	set_mixer();
+	if (chroot_ready) {
+		unlink(fifo_path);
+		if (mkfifo(fifo_path, 0666) == 0 && run_chroot(pa_script, "nes-pa.sh", NULL, NULL) > 0) {
+			snd_pulse = true;
+			logmsg("sound: starting PulseAudio");
+		}
+	}
+	if (!snd_pulse)
+		sound_alsa();
+	if (pcm)
+		logmsg("sound: the card's buffer %u frames (%d periods), plays from %d periods in, restart %s",
+		       pcm_get_buffer_size(pcm), set_sndperiods, set_sndstart, set_sndrestart ? "unseen" : "counted");
+	{
+		FILE *c = fopen("/proc/asound/cards", "r");
+		char line[160];
+		while (c && fgets(line, sizeof line, c)) {
+			line[strcspn(line, "\n")] = 0;
+			logmsg("sound card: %s", line);
+		}
+		if (c)
+			fclose(c);
+	}
+	pthread_t t;
+	if (pcm || snd_pulse) {
+		snd_running = true;
+		if (pthread_create(&t, NULL, snd_thread, NULL) != 0) {
+			snd_running = false;
+			logmsg("sound: no thread");
+		} else {
+			pthread_detach(t);
+		}
+	}
+}
+
+/* The card opened straight (no PulseAudio): it plays once 3 periods are in */
+static void sound_alsa(void)
+{
 	static const unsigned rates[] = {48000, 44100, 32000};
 	for (size_t i = 0; i < 3 && !pcm; i++) {
 		struct pcm_config cfg = {
@@ -2191,30 +2321,7 @@ static void sound_open(void)
 			pcm_close(p);
 		}
 	}
-	logmsg(pcm ? "sound: playing at %u Hz" : "sound: no output (%u)", snd_rate);
-	if (pcm)
-		logmsg("sound: the card's buffer %u frames (%d periods), plays from %d periods in, restart %s",
-		       pcm_get_buffer_size(pcm), set_sndperiods, set_sndstart, set_sndrestart ? "unseen" : "counted");
-	{
-		FILE *c = fopen("/proc/asound/cards", "r");
-		char line[160];
-		while (c && fgets(line, sizeof line, c)) {
-			line[strcspn(line, "\n")] = 0;
-			logmsg("sound card: %s", line);
-		}
-		if (c)
-			fclose(c);
-	}
-	pthread_t t;
-	if (pcm) {
-		snd_running = true;
-		if (pthread_create(&t, NULL, snd_thread, NULL) != 0) {
-			snd_running = false;
-			logmsg("sound: no thread");
-		} else {
-			pthread_detach(t);
-		}
-	}
+	logmsg(pcm ? "sound: the card straight at %u Hz" : "sound: no output (%u)", snd_rate);
 }
 
 static void cb_audio_sample(int16_t l, int16_t r)
@@ -2932,12 +3039,13 @@ static void *musb_watch(void *arg)
 	return NULL;
 }
 
-static void start_bluetooth(void)
+static bool chroot_ready;
+
+/* The lending system's root (an overlay over it) for its programs: BlueZ, PulseAudio */
+static bool donor_chroot(void)
 {
-	if (!set_bluetooth) {
-		logmsg("Bluetooth: off in nes.txt");
-		return;
-	}
+	if (chroot_ready)
+		return true;
 	FILE *fw = fopen("/sys/module/firmware_class/parameters/path", "w");
 	if (fw) {
 		fputs("/donor/lib/firmware", fw);
@@ -2947,12 +3055,12 @@ static void start_bluetooth(void)
 	mkdir("/ovl", 0755);
 	mkdir("/bt", 0755);
 	if (mount("tmpfs", "/ovl", "tmpfs", 0, "size=16m") != 0)
-		return;
+		return false;
 	mkdir("/ovl/up", 0755);
 	mkdir("/ovl/work", 0755);
 	if (mount("overlay", "/bt", "overlay", 0, "lowerdir=/donor,upperdir=/ovl/up,workdir=/ovl/work") != 0) {
 		logmsg("Bluetooth: overlay: %s", strerror(errno));
-		return;
+		return false;
 	}
 	mount("/proc", "/bt/proc", NULL, MS_BIND, NULL);
 	mount("/sys", "/bt/sys", NULL, MS_BIND, NULL);
@@ -2963,6 +3071,18 @@ static void start_bluetooth(void)
 	mkdir("/nes/bt", 0700);
 	mkdir("/bt/nes-bt", 0700);
 	mount("/nes/bt", "/bt/nes-bt", NULL, MS_BIND, NULL);
+	chroot_ready = true;
+	return true;
+}
+
+static void start_bluetooth(void)
+{
+	if (!donor_chroot())
+		return;
+	if (!set_bluetooth) {
+		logmsg("Bluetooth: off in nes.txt");
+		return;
+	}
 	if (run_chroot(bt_script, "nes-bt.sh", NULL, NULL) > 0) {
 		bt_started = true;
 		logmsg("Bluetooth: starting the donor's BlueZ");
@@ -4662,6 +4782,7 @@ int main(int argc, char **argv)
 	if (init)
 		as_init();
 	signal(SIGTERM, on_signal);
+	signal(SIGPIPE, SIG_IGN);             /* pacat gone: a write error, not the end */
 	signal(SIGINT, on_signal);
 	{
 		struct sigaction sa;
