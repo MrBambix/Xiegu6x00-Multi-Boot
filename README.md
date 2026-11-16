@@ -127,7 +127,15 @@ Wciśnięty MFK albo GEN otwiera w grze menu (po menu chodzi się gałką MFK): 
 głośność, zapis i odczyt stanu, Bluetooth, wyjście z gry, wyłączenie radia. Menu główne emulatora to kafelki: lista gier
 (obok obrazek gry, jeśli jest plik `.png`/`.jpg`/`.bmp` o nazwie gry obok niej albo w `NES/IMG`), sterowanie
 (klawisze i własny układ przycisków pada), Bluetooth, wyłączenie radia. W długiej liście gier przytrzymany
-kierunek przewija coraz szybciej, lewo/prawo skacze do następnej litery, gałka VFO o stronę. POWER wyłącza radio.
+kierunek przewija coraz szybciej, lewo/prawo skacze do następnej litery, gałka VFO o stronę.
+
+**WiFi, strona z grami, aktualizacja:** kafelek **WiFi** łączy radio z siecią (hasło na klawiaturze
+ekranowej albo z klawiatury USB/Bluetooth; sieć zapamiętuje się jako klucz PSK, bez hasła). Po połączeniu
+radio wystawia stronę `http://<adres radia>/`, na której z przeglądarki w tej samej sieci wgrywasz i
+usuwasz gry z folderu `NES` (strona nie ma hasła: każdy w tej sieci ją widzi). W menu WiFi jest też
+**Aktualizacja emulatora**: pobiera najnowszy obraz emulatora z wydań na GitHubie, sprawdza sumę SHA-256,
+zapisuje go na partycję emulatora i wyłącza radio. Nie wyłączaj radia w trakcie zapisu. Do tego wszystkiego
+emulator używa programów systemu OpenX6X00 z karty (wpa_supplicant, Python). POWER wyłącza radio.
 
 **Klawiatura, mysz, pady (USB i Bluetooth):** klawiatura: strzałki lub WASD, X/K = A, Z/J = B,
 Enter = Start, Shift lub spacja = Select, C/V = turbo, Esc = menu, F2/F4 = szybki zapis/odczyt.

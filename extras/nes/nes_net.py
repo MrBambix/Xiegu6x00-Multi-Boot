@@ -11,9 +11,9 @@ import html
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -82,6 +82,8 @@ def save_network():
         pw = f.readline().rstrip("\n")
     os.remove("/tmp/net-req.txt")
     os.makedirs("/nes-net", exist_ok=True)
+    if pw and not 8 <= len(pw.encode()) <= 63:
+        raise ValueError("password: 8 to 63 characters")
     if pw:
         out = run("wpa_passphrase", ssid, pw).stdout
         block = "\n".join(l for l in out.splitlines() if not l.strip().startswith("#psk"))
@@ -107,7 +109,11 @@ def ip_of():
 
 def up():
     if os.path.exists("/tmp/net-req.txt"):
-        save_network()
+        try:
+            save_network()
+        except ValueError as e:
+            say("net-state", "fail\t%s" % e)
+            return
     if not os.path.exists(CONF):
         say("net-state", "fail\tno network chosen")
         return
@@ -142,7 +148,9 @@ def up():
         say("net-state", "fail\tno address (DHCP)")
         return
     say("net-state", "ok\t%s\t%s" % (ssid, ip))
-    if os.fork() == 0:                  # the web page, while the network lasts
+    if not os.path.exists("/tmp/net-web.pid") and os.fork() == 0:   # the web page, while the network lasts
+        with open("/tmp/net-web.pid", "w") as f:
+            f.write(str(os.getpid()))
         os.setsid()
         web()
         os._exit(0)
@@ -222,7 +230,7 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         if not name or n <= 0 or n > 16 << 20:
             return self.reply(400, "zła nazwa albo rozmiar")
-        tmp = os.path.join(GAMES, ".upload.tmp")
+        tmp = os.path.join(GAMES, ".upload-%d.tmp" % threading.get_ident())
         with open(tmp, "wb") as f:
             left = n
             while left:

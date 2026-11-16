@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A pretend bluetoothctl (BlueZ 5.65's words and manners) for the emulator's PC test."""
-import os, sys, threading, time
+import os, sys, threading
 
 P = "\x1b[0;94m[bluetooth]\x1b[0m# "
 lock = threading.Lock()
