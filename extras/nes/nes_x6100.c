@@ -826,6 +826,7 @@ struct dev {
 	struct padmap map;
 	uint32_t held;                     /* libretro bits */
 	bool joyclass;                     /* buttons from BTN_TRIGGER on (cheap USB pads), not BTN_SOUTH */
+	bool short_pad;                    /* no buttons 11 and 12 (BTN_SELECT, BTN_START): a 10-button layout */
 	uint32_t sel_since;                /* Select held since */
 	uint16_t vendor, product;          /* the USB/Bluetooth ids: who made it */
 	const char *profile;               /* the layout taken by default: "Xbox", "PlayStation"... */
@@ -1015,7 +1016,12 @@ static void default_map(struct dev *d)
 	bool is_xbox = d->vendor == 0x045e || name_has(d->name, xbox);
 	bool is_ps = d->vendor == 0x054c || (!is_xbox && name_has(d->name, ps));
 	bool is_nin = d->vendor == 0x057e || (!is_xbox && !is_ps && name_has(d->name, nin));
-	if (is_xbox) {                           /* A B _ X Y _ LB RB _ _ View Menu Xbox */
+	if (is_xbox && d->short_pad) {           /* an older Xbox pad on classic Bluetooth, its older */
+		d->profile = "Xbox (10)";            /* firmware: A B X Y LB RB View Menu LS RS */
+		bind_key(m, J_A, BTN_SOUTH); bind_key(m, J_B, BTN_EAST);
+		bind_key(m, J_X, BTN_C); bind_key(m, J_Y, BTN_NORTH);
+		bind_key(m, J_SELECT, BTN_TL); bind_key(m, J_START, BTN_TR);
+	} else if (is_xbox) {                    /* A B _ X Y _ LB RB _ _ View Menu Xbox */
 		d->profile = "Xbox";                 /* by the letters: Xbox A is NES A, Xbox B is NES B */
 		bind_key(m, J_A, BTN_SOUTH); bind_key(m, J_B, BTN_EAST);
 		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_WEST);
@@ -1042,6 +1048,9 @@ static void default_map(struct dev *d)
 		bind_key(m, J_A, BTN_SOUTH); bind_key(m, J_B, BTN_EAST);
 		bind_key(m, J_X, BTN_NORTH); bind_key(m, J_Y, BTN_WEST);
 		bind_key(m, J_SELECT, BTN_SELECT); bind_key(m, J_START, BTN_START);
+		if (d->short_pad) {                   /* ten buttons: the 9th and 10th are Select and Start */
+			bind_key(m, J_SELECT, BTN_TL2); bind_key(m, J_START, BTN_TR2);
+		}
 	}
 	add_directions(m);
 }
@@ -1303,6 +1312,7 @@ static void open_inputs(void)
 			memset(kb, 0, sizeof kb);
 			ioctl(fd, EVIOCGBIT(EV_KEY, sizeof kb), kb);
 			v->joyclass = TEST_BIT(kb, BTN_TRIGGER) && !TEST_BIT(kb, BTN_SOUTH);
+			v->short_pad = TEST_BIT(kb, BTN_SOUTH) && !TEST_BIT(kb, BTN_SELECT) && !TEST_BIT(kb, BTN_START);
 			struct input_id iid;
 			if (ioctl(fd, EVIOCGID, &iid) == 0) {
 				v->vendor = iid.vendor;
