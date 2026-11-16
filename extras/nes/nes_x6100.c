@@ -375,8 +375,10 @@ static void text_mode(void)
 static bool save_state(int slot);
 static bool game_on;
 
+static void bt_pads_off(void);
 static void leave(int cmd)
 {
+	bt_pads_off();
 	save_sram();
 	if (game_on)
 		save_state(9);                    /* where it was left: "continue" next time */
@@ -839,6 +841,9 @@ struct dev {
 	char uniq[24];                     /* a Bluetooth one's address */
 	bool short_pad;                    /* no buttons 11 and 12 (BTN_SELECT, BTN_START): a 10-button layout */
 	uint32_t sel_since;                /* Select held since */
+	uint32_t mode_since;               /* the guide (Xbox / PS) button held since */
+	bool mode_long;                    /* held long: its power menu asked, the short press not taken */
+	uint8_t trig_was;                  /* the menus' shoulders and triggers as they were: bits */
 	uint16_t vendor, product;          /* the USB/Bluetooth ids: who made it */
 	const char *profile;               /* the layout taken by default: "Xbox", "PlayStation"... */
 };
@@ -856,6 +861,8 @@ static int mouse_dx, mouse_dy, mouse_btn;   /* gathered until the core reads the
 static int frame_mdx, frame_mdy;
 static uint32_t frame_bits[2];
 static bool want_menu;                      /* the emulator's menu asked for */
+static int want_power = -1;                 /* the guide button held: its pad's power menu (the device) */
+static void power_menu(bool overlay);
 static enum nav navq[32];
 static unsigned nav_w, nav_r;
 static uint32_t prev_nav_bits;
@@ -1531,8 +1538,59 @@ static void poll_input(void)
 	uint32_t p[2] = {radio_bits | kb_bits | knob_bits, 0};
 	for (int i = 0; i < n_devs; i++)
 		if (devs[i].role == ROLE_PAD && devs[i].port >= 0) {
-			devs[i].held = learn_dev == -1 ? hold_select(&devs[i], pad_bits(&devs[i])) : 0;
-			p[devs[i].port] |= devs[i].held;
+			struct dev *d = &devs[i];
+			d->held = learn_dev == -1 ? hold_select(d, pad_bits(d)) : 0;
+			/* the guide button (the console's logo): a press the menu, held a second its power
+			 * menu, as on the consoles */
+			if (learn_dev == -1 && TEST_BIT(d->keys, BTN_MODE)) {
+				d->held &= ~BIT(J_MENU);
+				if (!d->mode_since)
+					d->mode_since = t ? t : 1;
+				else if (!d->mode_long && t - d->mode_since >= 1000) {
+					d->mode_long = true;
+					want_power = i;
+				}
+			} else if (d->mode_since) {
+				if (!d->mode_long && learn_dev == -1) {
+					nav_push(N_MENU);
+					want_menu = true;
+				}
+				d->mode_since = 0;
+				d->mode_long = false;
+			}
+			/* in the menus: the shoulders a page, the triggers held fast scrolling (the game
+			 * itself has them as ever) */
+			if (menu_depth && learn_dev == -1) {
+				bool lt = TEST_BIT(d->keys, BTN_TL2), rt = TEST_BIT(d->keys, BTN_TR2);
+				static const unsigned lt_ax[] = {ABS_BRAKE, ABS_Z}, rt_ax[] = {ABS_GAS, ABS_RZ};
+				bool analog_z = d->profile && (!strcmp(d->profile, "Xbox") || !strcmp(d->profile, "PlayStation"));
+				for (int k = 0; k < 2; k++) {
+					if (k == 1 && !analog_z) break;
+					unsigned la = lt_ax[k], ra = rt_ax[k];
+					if (d->amax[la] > d->amin[la] && d->abs[la] > d->amin[la] + (d->amax[la] - d->amin[la]) * 6 / 10) lt = true;
+					if (d->amax[ra] > d->amin[ra] && d->abs[ra] > d->amin[ra] + (d->amax[ra] - d->amin[ra]) * 6 / 10) rt = true;
+				}
+				uint8_t now = (uint8_t)((TEST_BIT(d->keys, BTN_TL) ? 1 : 0) | (TEST_BIT(d->keys, BTN_TR) ? 2 : 0) |
+				                        (lt ? 4 : 0) | (rt ? 8 : 0));
+				uint8_t pr = now & ~d->trig_was;
+				if (pr & 1) nav_push(N_PGUP);
+				if (pr & 2) nav_push(N_PGDN);
+				static uint32_t trig_at, trig_since;
+				if (pr & 12) {
+					trig_since = t;
+					trig_at = t;
+				}
+				if ((now & 12) && (int32_t)(t - trig_at) >= 0) {
+					uint32_t held = t - trig_since;
+					nav_fast = held > 3000 ? 50 : held > 1200 ? 20 : 10;
+					nav_push(now & 4 ? N_UPF : N_DOWNF);
+					trig_at = t + 120;
+				}
+				d->trig_was = now;
+			} else {
+				d->trig_was = 0;
+			}
+			p[d->port] |= d->held;
 		}
 	frame_bits[0] = p[0] & 0xfff;
 	frame_bits[1] = p[1] & 0xfff;
@@ -1873,6 +1931,12 @@ static int menu_ex(const char *title, const char *const *items, int n, int sel, 
 	for (;;) {
 		nav_pages = longlist;
 		poll_input();
+		if (want_power >= 0 && !overlay) {
+			power_menu(false);
+			nav_pages = longlist;
+			dirty = true;
+			continue;
+		}
 		int old = v.sel, old_top = v.top;
 		int c = list_step(&v, &dirty);
 		want_menu = false;
@@ -3525,6 +3589,37 @@ static void bt_poll(void)
 		}
 }
 
+/* A Bluetooth pad let go: the host ends the link, the pad switches itself off (a DualShock or
+ * DualSense at once, an Xbox pad after its own short search) */
+static void bt_pad_off(const char *mac)
+{
+	char up[18];
+	snprintf(up, sizeof up, "%.17s", mac);
+	for (char *c = up; *c; c++) *c = (char)toupper((unsigned char)*c);
+	if (!is_mac(up) || bt_fd < 0)
+		return;
+	logmsg("bt: %s switched off (disconnected)", up);
+	bt_send("disconnect %s", up);
+}
+
+/* Leaving: every connected Bluetooth pad let go, a moment given for it */
+static void bt_pads_off(void)
+{
+	bool any = false;
+	for (int i = 0; i < n_devs; i++)
+		if (devs[i].role == ROLE_PAD && devs[i].bus == BUS_BLUETOOTH && devs[i].uniq[0]) {
+			bt_pad_off(devs[i].uniq);
+			any = true;
+		}
+	if (!any)
+		return;
+	uint32_t t0 = now_ms();
+	while (now_ms() - t0 < 1500) {
+		bt_poll();
+		usleep(50000);
+	}
+}
+
 /* A Bluetooth pad's battery in per cent by its address (the input device's "uniq"); -1: not known */
 static int bt_battery(const char *mac)
 {
@@ -4053,7 +4148,38 @@ static void __attribute__((unused)) sound_menu(bool overlay)   /* hidden for now
 }
 
 /* What the in-game menu can do */
-enum { M_RESUME, M_RESET, M_VOLUME, M_ASPECT, M_SAVE, M_LOAD, M_PAIR, M_LIST, M_OFF, M_N };
+/* The guide button held: as on the consoles, the pad off or the radio off */
+static void power_menu(bool overlay)
+{
+	int i = want_power;
+	want_power = -1;
+	if (i < 0 || i >= n_devs)
+		return;
+	struct dev *d = &devs[i];
+	bool bt = d->bus == BUS_BLUETOOTH && d->uniq[0];
+	char title[64];
+	const char *kind = d->profile ? d->profile : "";
+	snprintf(title, sizeof title, kind[0] && strcmp(kind, "USB") && strcmp(kind, "ogólny") && strcmp(kind, "generic")
+	         ? "Pad %s" : "Pad%s", kind[0] && strcmp(kind, "USB") && strcmp(kind, "ogólny") && strcmp(kind, "generic") ? kind : "");
+	const char *items[3];
+	int n = 0, act[3];
+	if (bt) { items[n] = T("Wyłącz pada", "Switch the pad off"); act[n++] = 0; }
+	items[n] = T("Wyłącz radio", "Switch the radio off"); act[n++] = 1;
+	items[n] = T("Wróć", "Back"); act[n++] = 2;
+	if (overlay)
+		game_to_canvas();
+	int c = menu(title, items, n, 0, T("MFK / F1 / A: wybierz  F2 / B: wróć", "MFK / F1 / A: choose  F2 / B: back"), overlay);
+	if (c < 0)
+		return;
+	if (act[c] == 0) {
+		bt_pad_off(d->uniq);
+		note(T("Pad wyłączony", "Pad switched off"));
+	} else if (act[c] == 1) {
+		leave(RB_POWER_OFF);
+	}
+}
+
+enum { M_RESUME, M_RESET, M_ASPECT, M_SAVE, M_LOAD, M_LIST, M_OFF, M_N };
 
 static bool state_exists(int slot)
 {
@@ -4065,15 +4191,13 @@ static bool state_exists(int slot)
 
 static int game_menu(void)
 {
-	char vol[64];
-	snprintf(vol, sizeof vol, T("Głośność: %d z 55  (gałka VOL)", "Volume: %d of 55  (VOL knob)"), set_rxvol);
 	const char *pic = set_aspect == 2 ? T("Obraz: cały ekran", "Picture: the whole screen")
 	                  : set_aspect ? T("Obraz: 4:3", "Picture: 4:3") : T("Obraz: 2x (ostry)", "Picture: 2x (sharp)");
 	const char *items[M_N] = {
-		T("Wróć do gry", "Back to the game"), T("Zacznij grę od nowa", "Start the game again"), vol, pic,
+		T("Wróć do gry", "Back to the game"), T("Zacznij grę od nowa", "Start the game again"), pic,
 		T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
-		T("Bluetooth", "Bluetooth"), T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
+		T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
 		T("Wyłącz radio", "Switch the radio off"),
 	};
 	int c = menu(cur_base, items, M_N, 0, T("MFK / F1 / A: wybierz  GEN: wróć do gry", "MFK / F1 / A: choose  GEN: back to the game"), true);
@@ -4111,16 +4235,42 @@ static void help(void)
 }
 
 /* A word over the game, top left */
+/* The game's picture in a part of the canvas (black where the game is not) */
+static void game_to_canvas_rect(int rx, int ry, int rw, int rh)
+{
+	for (int y = ry; y < ry + rh && y < LAND_H; y++)
+		for (int x = rx; x < rx + rw && x < LAND_W; x++) {
+			int gx = x - gx0, gy = y - gy0;
+			canvas[y * LAND_W + x] = frame_data && mapped_w && gx >= 0 && gx < gw && gy >= 0 && gy < gh
+			                         ? src_px(map_x[gx], map_y[gy]) : 0;
+		}
+}
+
+/* A word in a bubble over the game: only the bubble's own place is touched (the game's picture
+ * under its round corners), so nothing black runs beside it */
+static int osd_x, osd_w;
 static void osd(const char *msg)
 {
 	int w = text_w(F_BODY, msg) + 48;
 	if (w > LAND_W - 20) w = LAND_W - 20;
 	int x = (LAND_W - w) / 2;
-	fill(0, 0, LAND_W, 46, 0);
+	osd_x = x;
+	osd_w = w;
+	game_to_canvas_rect(x, 6, w, 36);
 	box(x, 6, w, 36, 18, C_PANEL, C_LINE);
 	rrect(x + 14, 20, 8, 8, 4, C_ACCENT);
 	draw_text_fit(x + 30, 13, F_BODY, C_TEXT, msg, w - 44, false);
-	present(0, 0, LAND_W, 46);
+	present(x, 6, w, 36);
+}
+
+/* The bubble gone: the game's picture (or black beside it) back in its place */
+static void osd_clear(void)
+{
+	if (!osd_w)
+		return;
+	game_to_canvas_rect(osd_x, 6, osd_w, 36);
+	present(osd_x, 6, osd_w, 36);
+	osd_w = 0;
 }
 
 
@@ -4198,6 +4348,14 @@ static void play(int idx)
 	bool done = false;
 	while (!done) {
 		poll_input();
+		if (want_power >= 0) {
+			power_menu(true);
+			input_settle();
+			memset(canvas, 0, sizeof canvas);
+			present(0, 0, LAND_W, LAND_H);
+			clock_gettime(CLOCK_MONOTONIC, &next);
+			continue;
+		}
 		if (want_menu || quick_save || quick_load) {
 			int c = M_RESUME;
 			if (quick_save) c = M_SAVE;
@@ -4213,12 +4371,6 @@ static void play(int idx)
 			case M_LOAD: msg = load_state(0) ? T("Stan wczytany", "State loaded") : T("Brak zapisu", "No saved state"); break;
 			case M_RESET: retro_reset(); break;
 
-			case M_VOLUME:                    /* a step up, round again from the top; the menu again */
-				set_rxvol = set_rxvol >= 55 ? 10 : set_rxvol + 5 > 55 ? 55 : set_rxvol + 5;
-				sound_apply();
-				sound_save();
-				want_menu = true;
-				break;
 
 
 			case M_ASPECT:                    /* the next size, at once; the menu again */
@@ -4227,7 +4379,6 @@ static void play(int idx)
 				mapped_w = 0;                 /* the maps made again */
 				want_menu = true;
 				break;
-			case M_PAIR: bt_menu(); break;
 			case M_LIST: save_state(9); done = true; break;
 			case M_OFF: leave(RB_POWER_OFF); break;
 			}
@@ -4260,8 +4411,7 @@ static void play(int idx)
 		} else if (osd_shown) {
 			osd_shown = false;
 			note_until = 0;
-			fill(0, 0, LAND_W, 46, 0);
-			present(0, 0, LAND_W, 46);
+			osd_clear();
 		}
 		sound_flush();
 		frames++;
@@ -4565,6 +4715,11 @@ static int tiles_menu(int sel)
 	nav_pages = false;
 	for (;;) {
 		poll_input();
+		if (want_power >= 0) {
+			power_menu(false);
+			dirty = true;
+			continue;
+		}
 		enum nav k;
 		while ((k = nav_pop()) != N_NONE) {
 			dirty = true;
