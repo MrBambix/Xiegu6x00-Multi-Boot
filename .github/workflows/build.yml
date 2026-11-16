@@ -75,7 +75,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: nes-x6100-rootfs
-          path: extras/nes/out/nes-x6100-rootfs.ext4.xz
+          path: |
+            extras/nes/out/nes-x6100-rootfs.ext4.xz
+            extras/nes/out/nes-x6100-rootfs.ext4.xz.sha256
+            extras/nes/out/nes-version.txt
 
   apps:
     needs: [test, uboot, doom, nes]
@@ -177,7 +180,8 @@ jobs:
           GIVEN: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
           MSG: ${{ github.event.head_commit.message }}
         # The U-Boot from the Linux job only: two jobs putting the same file up at once clash
-        run: python .github/publish.py out/* $([ "$RUNNER_OS" = Linux ] && echo x6100mb/data/u-boot-x6100-menu.bin)
+        # with the emulator's image for its update over the air (from the Linux job too)
+        run: python .github/publish.py out/* $([ "$RUNNER_OS" = Linux ] && echo x6100mb/data/u-boot-x6100-menu.bin x6100mb/data/nes-x6100-rootfs.ext4.xz x6100mb/data/nes-x6100-rootfs.ext4.xz.sha256 x6100mb/data/nes-version.txt)
 
   # The app fetches the newest systems itself and builds a card from them: a check only, nothing
   # of it is published (the release carries the app; users fetch the systems they want in it)

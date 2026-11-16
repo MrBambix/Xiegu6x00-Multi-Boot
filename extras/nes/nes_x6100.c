@@ -872,6 +872,10 @@ static int nav_fast = 5;
 static bool quick_save, quick_load;
 static int menu_mouse;                      /* the mouse's way up and down, for the menus */
 static int menu_depth;                      /* a menu or a message on the screen (MFK pressed: OK) */
+static bool text_cap;                       /* a text being typed: the keyboard's letters kept */
+static char typed[32];                      /* them, in order */
+static unsigned typed_n;
+static bool kb_shift;
 
 static char note_text[96];                  /* a word over the game for a while */
 static uint32_t note_until;
@@ -1489,6 +1493,17 @@ static void poll_input(void)
 				if (ev.type == EV_KEY && (ev.value == 0 || ev.value == 1)) {
 					if (ev.code == KEY_F2 && ev.value) quick_save = true;
 					if (ev.code == KEY_F4 && ev.value) quick_load = true;
+					if (ev.code == KEY_LEFTSHIFT || ev.code == KEY_RIGHTSHIFT)
+						kb_shift = ev.value;
+					if (text_cap && ev.value && typed_n < sizeof typed) {
+						static const char lo[] = "  1234567890-=\b\tqwertyuiop[]\n asdfghjkl;'` \\zxcvbnm,./";
+						static const char hi[] = "  !@#$%^&*()_+\b\tQWERTYUIOP{}\n ASDFGHJKL:\"~ |ZXCVBNM<>?";
+						if (ev.code == KEY_SPACE)
+							typed[typed_n++] = ' ';
+						else if (ev.code < sizeof lo - 1 && lo[ev.code] != ' ')
+							typed[typed_n++] = kb_shift ? hi[ev.code] : lo[ev.code];
+						break;                    /* the letters are not the game's keys meanwhile */
+					}
 					if (ev.code == KEY_PAGEUP && ev.value) nav_push(N_PGUP);
 					if (ev.code == KEY_PAGEDOWN && ev.value) nav_push(N_PGDN);
 					int j = kb_key(ev.code);
@@ -3144,6 +3159,8 @@ static void *musb_watch(void *arg)
 }
 
 static bool chroot_ready;
+static void copy_file_early(const char *from, const char *to);
+static void restore_kept_early(void);
 
 /* The lending system's root (an overlay over it) for its programs: BlueZ, PulseAudio */
 static bool donor_chroot(void)
@@ -3175,7 +3192,18 @@ static bool donor_chroot(void)
 	mkdir("/nes/bt", 0700);
 	mkdir("/bt/nes-bt", 0700);
 	mount("/nes/bt", "/bt/nes-bt", NULL, MS_BIND, NULL);
+	mkdir("/nes/net", 0700);
+	mkdir("/bt/nes-net", 0700);
+	mount("/nes/net", "/bt/nes-net", NULL, MS_BIND, NULL);
+	mkdir("/bt/games", 0755);
+	mount(roms_dir, "/bt/games", NULL, MS_BIND, NULL);
+	mkdir("/bt/nes-root", 0755);
+	mount("/nes", "/bt/nes-root", NULL, MS_BIND | MS_RDONLY, NULL);
+	copy_file_early("/nes/nes_net.py", "/bt/tmp/nes_net.py");
 	chroot_ready = true;
+	restore_kept_early();
+	if (access("/nes/net/wifi.conf", R_OK) == 0)    /* a network chosen before: on again */
+		run_chroot("exec /usr/bin/python3 /tmp/nes_net.py up >>/tmp/net.log 2>&1\n", "nes-net-up.sh", NULL, NULL);
 	return true;
 }
 
@@ -4750,6 +4778,407 @@ static void games_tab(void)
 	}
 }
 
+/* ------------------------------------------------------------------------------------------ */
+/* WiFi, the games' web page, the update over the air: nes_net.py in the lending system's root  */
+/* ------------------------------------------------------------------------------------------ */
+static const char net_sh[] = "exec /usr/bin/python3 /tmp/nes_net.py \"$1\" \"$2\" >>/tmp/net.log 2>&1\n";
+
+static void net_run(const char *cmd, const char *arg)
+{
+	if (!chroot_ready) return;
+	run_chroot(net_sh, "nes-net.sh", cmd, arg);
+}
+
+/* A line the helper wrote (/bt/tmp/NAME.txt), split at tabs; false: none yet */
+static bool net_read(const char *name, char *out, size_t n)
+{
+	char path[96];
+	snprintf(path, sizeof path, "/bt/tmp/%s.txt", name);
+	FILE *f = fopen(path, "r");
+	if (!f) return false;
+	bool ok = fgets(out, (int)n, f) != NULL;
+	fclose(f);
+	out[strcspn(out, "\n")] = 0;
+	return ok;
+}
+
+static void net_forget(const char *name)
+{
+	char path[96];
+	snprintf(path, sizeof path, "/bt/tmp/%s.txt", name);
+	unlink(path);
+}
+
+static char net_ip[24], net_ssid[64];
+
+/* The state now: true when connected (its name and address kept) */
+static bool net_on(void)
+{
+	char l[160];
+	if (!net_read("net-state", l, sizeof l) || strncmp(l, "ok\t", 3))
+		return false;
+	char *a = l + 3, *b = strchr(a, '\t');
+	if (!b) return false;
+	*b = 0;
+	snprintf(net_ssid, sizeof net_ssid, "%s", a);
+	snprintf(net_ip, sizeof net_ip, "%s", b + 1);
+	return true;
+}
+
+/* Waiting for the helper's word on NAME (secs), a panel meanwhile; its line, or "" */
+static bool net_wait(const char *name, const char *title, const char *what, unsigned secs, char *out, size_t n,
+                     const char *busy_prefix)
+{
+	uint32_t t0 = now_ms();
+	input_settle();
+	menu_depth++;
+	bool got = false;
+	while ((now_ms() - t0) / 1000 < secs) {
+		if (net_read(name, out, n) && !(busy_prefix && !strncmp(out, busy_prefix, strlen(busy_prefix)))) {
+			got = true;
+			break;
+		}
+		char sec[48];
+		snprintf(sec, sizeof sec, "%u s", (now_ms() - t0) / 1000);
+		char prog[64] = "";
+		char pl[64];
+		if (!strcmp(name, "ota-state") && net_read("ota-progress", pl, sizeof pl)) {
+			long a = atol(pl), b = strchr(pl, '\t') ? atol(strchr(pl, '\t') + 1) : 0;
+			if (b > 0) snprintf(prog, sizeof prog, "%ld z %ld KB", a / 1024, b / 1024);
+		}
+		const char *l[] = {what, prog[0] ? prog : sec};
+		panel(title, l, 2, -1);
+		poll_input();
+		while (nav_pop() != N_NONE) ;
+		idle(150);
+	}
+	menu_depth--;
+	input_settle();
+	if (!got) out[0] = 0;
+	return got;
+}
+
+/* Text typed on an on-screen keyboard (or a real one): true when confirmed */
+static bool osk(const char *title, char *buf, size_t n)
+{
+	static const char *rows_lo[4] = {"1234567890", "qwertyuiop", "asdfghjkl-", "zxcvbnm_.@"};
+	static const char *rows_up[4] = {"1234567890", "QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM_.@"};
+	static const char *rows_sym[4] = {"!#$%&*()=+", "?/\\:;'\"<>,", "[]{}~^`|-_", ".@ €£§°±·"};
+	static const char *spec[5] = {"Aa", "#+", "␣", "⌫", "OK"};
+	int r = 1, c = 0, layer = 0;
+	size_t len = strlen(buf);
+	bool dirty = true;
+	text_cap = true;
+	typed_n = 0;
+	input_settle();
+	menu_depth++;
+	bool done = false, ok = false;
+	while (!done) {
+		poll_input();
+		for (unsigned i = 0; i < typed_n; i++) {          /* a real keyboard's letters */
+			char ch = typed[i];
+			if (ch == '\b') { if (len) buf[--len] = 0; }
+			else if (ch == '\n') { done = ok = true; }
+			else if (ch >= 32 && len + 1 < n) { buf[len++] = ch; buf[len] = 0; }
+			dirty = true;
+		}
+		typed_n = 0;
+		enum nav k;
+		while (!done && (k = nav_pop()) != N_NONE) {
+			dirty = true;
+			int cols = r == 4 ? 5 : 10;
+			if (k == N_UP) { r = (r + 4) % 5; }
+			else if (k == N_DOWN) { r = (r + 1) % 5; }
+			else if (k == N_LEFT) c = (c + cols - 1) % cols;
+			else if (k == N_RIGHT) c = (c + 1) % cols;
+			else if (k == N_BACK) { if (len) buf[--len] = 0; }
+			else if (k == N_MENU) done = true;
+			else if (k == N_OK) {
+				if (r < 4) {
+					const char *row = (layer == 2 ? rows_sym : layer == 1 ? rows_up : rows_lo)[r];
+					const char *p = row;
+					for (int i = 0; i < c && *p; i++) p += (*p & 0x80) ? ((*p & 0xe0) == 0xc0 ? 2 : 3) : 1;
+					int w = (*p & 0x80) ? ((*p & 0xe0) == 0xc0 ? 2 : 3) : 1;
+					if (*p && len + (size_t)w < n) { memcpy(buf + len, p, (size_t)w); len += (size_t)w; buf[len] = 0; }
+				} else if (c == 0) layer = layer == 1 ? 0 : 1;
+				else if (c == 1) layer = layer == 2 ? 0 : 2;
+				else if (c == 2) { if (len + 1 < n) { buf[len++] = ' '; buf[len] = 0; } }
+				else if (c == 3) { if (len) { do len--; while (len && (buf[len] & 0xc0) == 0x80); buf[len] = 0; } }
+				else done = ok = true;
+			}
+			if (r == 4 && c > 4) c = 4;
+		}
+		if (dirty) {
+			dirty = false;
+			fill_bg(0, 0, LAND_W, LAND_H);
+			fill(0, 0, LAND_W, 62, C_BAR);
+			fill(0, 62, LAND_W, 1, C_LINE);
+			draw_text_fit(26, 13, F_TITLE, C_TEXT, title, LAND_W - 52, false);
+			box(24, 74, LAND_W - 48, 46, 12, C_PANEL, C_ACCENT);
+			draw_text_fit(40, 84, F_LIST, C_TEXT, buf, LAND_W - 90, false);
+			int cx = 40 + text_w(F_LIST, buf);
+			if (cx < LAND_W - 40) fill(cx + 2, 84, 2, 26, C_ACCENT);
+			const char **rows = layer == 2 ? rows_sym : layer == 1 ? rows_up : rows_lo;
+			for (int y = 0; y < 5; y++) {
+				int cols = y == 4 ? 5 : 10, kw = y == 4 ? 140 : 70, gap = y == 4 ? 8 : 6;
+				int x0 = (LAND_W - (cols * kw + (cols - 1) * gap)) / 2, ky = 134 + y * 56;
+				const char *p = y < 4 ? rows[y] : NULL;
+				for (int x = 0; x < cols; x++) {
+					char key[8] = "";
+					if (y < 4) {
+						int w = (*p & 0x80) ? ((*p & 0xe0) == 0xc0 ? 2 : 3) : 1;
+						if (*p) { memcpy(key, p, (size_t)w); key[w] = 0; p += w; }
+					} else snprintf(key, sizeof key, "%s", spec[x]);
+					bool on = y == r && x == c;
+					rrect(x0 + x * (kw + gap), ky, kw, 48, 9, on ? C_ACCENT : C_PANEL2);
+					int tw = text_w(F_LIST, key);
+					draw_text(x0 + x * (kw + gap) + (kw - tw) / 2, ky + 10, F_LIST, on ? C_SEL_T : C_TEXT, key);
+				}
+			}
+			fill(0, LAND_H - 38, LAND_W, 38, C_BAR);
+			key_chips(24, LAND_H - 30, LAND_W - 20, T("MFK / F1 / A: wpisz  F2 / B: usuń  GEN: anuluj  OK: gotowe",
+			                                          "MFK / F1 / A: type  F2 / B: delete  GEN: cancel  OK: done"));
+			present(0, 0, LAND_W, LAND_H);
+		}
+		if (test_mode && !keys_scripted()) done = true;
+		idle(10);
+	}
+	text_cap = false;
+	menu_depth--;
+	input_settle();
+	return ok;
+}
+
+/* Connecting to a network chosen from a scan */
+static void wifi_scan(void)
+{
+	char l[200];
+	net_forget("net-scan");
+	net_run("scan", NULL);
+	if (!net_wait("net-scan", "WiFi", T("Szukam sieci…", "Looking for networks…"), 30, l, sizeof l, NULL)) {
+		const char *m[] = {T("Nie znaleziono sieci.", "No network found."), T("Czy WiFi radia działa?", "Is the radio's WiFi on?")};
+		message("WiFi", m, 2, 0);
+		return;
+	}
+	static char names[24][64], labels[24][96];
+	static int secure[24];
+	const char *items[24];
+	int n = 0;
+	FILE *f = fopen("/bt/tmp/net-scan.txt", "r");
+	while (f && n < 24 && fgets(l, sizeof l, f)) {
+		l[strcspn(l, "\n")] = 0;
+		char *a = strchr(l, '\t'), *b = a ? strchr(a + 1, '\t') : NULL;
+		if (!b || !b[1]) continue;
+		int sig = atoi(l);
+		secure[n] = atoi(a + 1);
+		snprintf(names[n], sizeof names[n], "%s", b + 1);
+		const char *bars = sig > -55 ? "▂▄▆█" : sig > -67 ? "▂▄▆" : sig > -78 ? "▂▄" : "▂";
+		(void)bars;
+		snprintf(labels[n], sizeof labels[n], "%s   %s%s", names[n], sig > -55 ? "●●●●" : sig > -67 ? "●●●○" : sig > -78 ? "●●○○" : "●○○○",
+		         secure[n] ? "" : T("  (otwarta)", "  (open)"));
+		items[n] = labels[n];
+		n++;
+	}
+	if (f) fclose(f);
+	if (!n) {
+		const char *m[] = {T("Nie znaleziono sieci.", "No network found.")};
+		message("WiFi", m, 1, 0);
+		return;
+	}
+	int c = menu(T("Sieci WiFi", "WiFi networks"), items, n, 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
+	if (c < 0) return;
+	char pw[64] = "";
+	if (secure[c]) {
+		char t[96];
+		snprintf(t, sizeof t, T("Hasło: %s", "Password: %s"), names[c]);
+		if (!osk(t, pw, sizeof pw)) return;
+	}
+	FILE *q = fopen("/bt/tmp/net-req.txt", "w");
+	if (!q) return;
+	fprintf(q, "%s\n%s\n", names[c], pw);
+	fclose(q);
+	memset(pw, 0, sizeof pw);
+	net_forget("net-state");
+	net_run("up", NULL);
+	net_wait("net-state", "WiFi", names[c], 60, l, sizeof l, "busy");
+	if (!strncmp(l, "ok\t", 3) && net_on()) {
+		char a[96];
+		snprintf(a, sizeof a, "http://%s/", net_ip);
+		const char *m[] = {T("Połączono z siecią", "Connected to"), net_ssid, "",
+		                   T("Gry wgrasz przez przeglądarkę:", "Add games in a web browser:"), a};
+		message(T("Gotowe", "Done"), m, 5, 0);
+	} else {
+		const char *why = strchr(l, '\t') ? strchr(l, '\t') + 1 : T("brak odpowiedzi", "no answer");
+		const char *m[] = {T("Nie udało się połączyć:", "Could not connect:"), why};
+		message("WiFi", m, 2, 0);
+	}
+}
+
+/* The emulator's partition, as the kernel was told (root=) */
+static bool root_device(char *out, size_t n)
+{
+	FILE *f = fopen("/proc/cmdline", "r");
+	char l[1024] = "";
+	if (!f) return false;
+	if (!fgets(l, sizeof l, f)) l[0] = 0;
+	fclose(f);
+	char *p = strstr(l, "root=/dev/");
+	if (!p) return false;
+	p += 5;
+	size_t k = strcspn(p, " \n");
+	if (k >= n) return false;
+	memcpy(out, p, k);
+	out[k] = 0;
+	return true;
+}
+
+/* What lives on the emulator's partition and must outlive an update: kept on BOOT a moment */
+static const char *const kept[] = {"/nes/bt/pairings.tar", "/nes/bt/forgotten.txt", "/nes/net/wifi.conf"};
+
+static bool copy_file(const char *from, const char *to)
+{
+	FILE *a = fopen(from, "rb");
+	if (!a) return false;
+	FILE *b = fopen(to, "wb");
+	if (!b) { fclose(a); return false; }
+	char buf[8192];
+	size_t r;
+	while ((r = fread(buf, 1, sizeof buf, a)) > 0) fwrite(buf, 1, r, b);
+	fclose(a);
+	fclose(b);
+	return true;
+}
+
+static void keep_for_update(void)
+{
+	mkdir("/boot/.nes-keep", 0700);
+	for (size_t i = 0; i < sizeof kept / sizeof *kept; i++) {
+		char to[160];
+		snprintf(to, sizeof to, "/boot/.nes-keep/%s", strrchr(kept[i], '/') + 1);
+		copy_file(kept[i], to);
+	}
+	flush_disks();
+}
+
+/* After an update: what was kept, back in its place */
+static void restore_kept(void)
+{
+	for (size_t i = 0; i < sizeof kept / sizeof *kept; i++) {
+		char from[160];
+		snprintf(from, sizeof from, "/boot/.nes-keep/%s", strrchr(kept[i], '/') + 1);
+		if (access(from, R_OK) == 0) {
+			if (access(kept[i], F_OK) != 0 && copy_file(from, kept[i]))
+				logmsg("update: %s kept", kept[i]);
+			unlink(from);
+		}
+	}
+	rmdir("/boot/.nes-keep");
+}
+
+static void ota_menu(void)
+{
+	char l[256];
+	net_forget("ota-state");
+	net_run("ota-check", NULL);
+	if (!net_wait("ota-state", T("Aktualizacja", "Update"), T("Sprawdzam GitHub…", "Asking GitHub…"), 40, l, sizeof l, NULL)
+	    || !strncmp(l, "fail", 4) || !strncmp(l, "none", 4)) {
+		const char *m[] = {T("Nie udało się sprawdzić:", "Could not check:"), strchr(l, '\t') ? strchr(l, '\t') + 1 : l};
+		message(T("Aktualizacja", "Update"), m, 2, 0);
+		return;
+	}
+	char *f[5] = {l};
+	for (int i = 1; i < 5 && f[i - 1]; i++) {
+		f[i] = strchr(f[i - 1], '\t');
+		if (f[i]) *f[i]++ = 0;
+	}
+	bool same = !strcmp(l, "same");
+	char line1[128], mine[64] = "?";
+	FILE *b = fopen("/nes/build.txt", "r");
+	if (b) { if (fgets(mine, sizeof mine, b)) mine[strcspn(mine, "\n")] = 0; fclose(b); }
+	snprintf(line1, sizeof line1, T("Najnowsza: %s (%s)", "Newest: %s (%s)"), f[1] ? f[1] : "?", f[2] ? f[2] : "?");
+	char line2[128];
+	snprintf(line2, sizeof line2, T("Zainstalowana: %.40s", "Installed: %.40s"), mine);
+	const char *items[] = {same ? T("Zainstaluj ponownie", "Install again") : T("Pobierz i zainstaluj", "Download and install"),
+	                       T("Wróć", "Back")};
+	const char *info[] = {line1, line2, same ? T("Masz już najnowszą wersję.", "You have the newest already.")
+	                                        : T("Jest nowsza wersja emulatora.", "A newer emulator is out.")};
+	message(T("Aktualizacja", "Update"), info, 3, 0);
+	if (menu(T("Aktualizacja", "Update"), items, 2, same ? 1 : 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false) != 0)
+		return;
+	net_forget("ota-state");
+	net_forget("ota-progress");
+	net_run("ota-get", NULL);
+	net_wait("ota-state", T("Aktualizacja", "Update"), T("Pobieram…", "Downloading…"), 300, l, sizeof l, NULL);
+	if (strncmp(l, "ready", 5)) {
+		const char *m[] = {T("Pobieranie nie udało się:", "The download failed:"), strchr(l, '\t') ? strchr(l, '\t') + 1 : l};
+		message(T("Aktualizacja", "Update"), m, 2, 0);
+		return;
+	}
+	char dev[64];
+	if (!root_device(dev, sizeof dev)) {
+		const char *m[] = {T("Nie wiem, gdzie jest emulator na karcie.", "Where the emulator is on the card: unknown.")};
+		message(T("Aktualizacja", "Update"), m, 1, 0);
+		return;
+	}
+	/* from here on nothing of the emulator may be read from its partition: all of it held in
+	 * memory, the partition read-only, then written anew */
+	keep_for_update();
+	save_sram();
+	if (game_on) save_state(9);
+	mlockall(MCL_CURRENT | MCL_FUTURE);
+	flush_disks();
+	mount("", "/", "", MS_REMOUNT | MS_RDONLY, NULL);
+	logmsg("update: writing %s", dev);
+	net_forget("ota-state");
+	net_run("ota-flash", dev);
+	net_wait("ota-state", T("Aktualizacja", "Update"), T("Zapisuję nową wersję… nie wyłączaj radia", "Writing the new version… keep the radio on"),
+	         180, l, sizeof l, NULL);
+	bool ok = !strncmp(l, "flashed", 7);
+	logmsg("update: %s", ok ? "written" : l);
+	const char *m[] = {ok ? T("Zaktualizowano.", "Updated.") : T("Zapis nie udał się:", "Writing failed:"),
+	                   ok ? T("Radio się wyłączy. Włącz je i wybierz NES.", "The radio switches off. Switch it on, choose NES.")
+	                      : (strchr(l, '\t') ? strchr(l, '\t') + 1 : l)};
+	message(T("Aktualizacja", "Update"), m, 2, 4000);
+	leave(RB_POWER_OFF);
+}
+
+static void copy_file_early(const char *from, const char *to) { copy_file(from, to); }
+static void restore_kept_early(void) { restore_kept(); }
+
+static void wifi_menu(void)
+{
+	int sel = 0;
+	for (;;) {
+		bool on = net_on();
+		char title[96], web[96];
+		snprintf(title, sizeof title, on ? T("WiFi: %s", "WiFi: %s") : "%s", on ? net_ssid : T("WiFi: nie połączono", "WiFi: not connected"));
+		snprintf(web, sizeof web, T("Strona z grami: http://%s/", "The games' page: http://%s/"), net_ip);
+		const char *items[5];
+		int act[5], n = 0;
+		items[n] = T("Połącz z siecią", "Connect to a network"); act[n++] = 0;
+		if (on) { items[n] = web; act[n++] = 1; }
+		if (on) { items[n] = T("Aktualizacja emulatora", "Update the emulator"); act[n++] = 2; }
+		if (on) { items[n] = T("Rozłącz WiFi", "Disconnect"); act[n++] = 3; }
+		if (sel >= n) sel = 0;
+		int c = menu(title, items, n, sel, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
+		if (c < 0) return;
+		sel = c;
+		switch (act[c]) {
+		case 0: wifi_scan(); break;
+		case 1: {
+			char a[96];
+			snprintf(a, sizeof a, "http://%s/", net_ip);
+			const char *m[] = {T("Otwórz w przeglądarce (ta sama sieć):", "Open in a browser (the same network):"), a, "",
+			                   T("Wgrywasz i usuwasz tam gry z folderu NES.", "Add and remove the NES folder's games there.")};
+			message(T("Strona z grami", "The games' page"), m, 4, 0);
+			break;
+		}
+		case 2: ota_menu(); break;
+		case 3: net_run("down", NULL); idle(1500); break;
+		}
+	}
+}
+
 /* The main menu's tiles: each a picture (tiles_art.h) over a band with its name */
 #include "tiles_art.h"
 
@@ -4789,7 +5218,52 @@ static void draw_tile(const struct tile *t, bool on)
 		rrect(t->x - 4, t->y - 4, t->w + 8, t->h + 8, 14, 0x1f7a4d);       /* the chosen one: a green ring */
 	rrect(t->x, t->y, t->w, t->h, 10, on ? 0xa8f5cd : t->border);
 	int ix = t->x + 4, iy = t->y + 4, iw = t->w - 8, ih = t->h - 8, ah = ih - t->band_h;
-	draw_shapes(t->art, t->n_art, ix, iy, t->art_h, iw, ah);
+	int art_w = t->big || t->w > 300 ? 370 : 178, shift = 0;
+	if (art_w > iw) {                                /* the drawing's own middle in the tile's */
+		int lo = art_w, hi = 0;
+		for (int i = 0; i < t->n_art; i++) {
+			const struct tile_shape *q = &t->art[i];
+			int x0 = q->kind == 1 ? q->x - q->w : q->x, x1 = q->kind == 1 ? q->x + q->w : q->kind == 2 ? q->x + 6 : q->x + q->w;
+			if (q->kind == 0 && q->w >= art_w / 2) continue;      /* sky, ground */
+			if (x0 < lo) lo = x0;
+			if (x1 > hi) hi = x1;
+		}
+		shift = hi > lo ? (lo + hi) / 2 - iw / 2 : (art_w - iw) / 2;
+		if (shift < 0) shift = 0;
+		if (hi - lo > iw - 8) {                      /* wider than the tile: drawn narrower */
+			static struct tile_shape tmp2[96];
+			int n = t->n_art < 96 ? t->n_art : 96, room = iw - 8;
+			for (int i = 0; i < n; i++) {
+				tmp2[i] = t->art[i];
+				if (tmp2[i].kind == 0 && tmp2[i].w >= art_w / 2) { tmp2[i].x = 0; tmp2[i].w = (int16_t)iw; continue; }
+				int nx = 4 + (tmp2[i].x - lo) * room / (hi - lo);
+				if (tmp2[i].kind == 0) {
+					int nw = tmp2[i].w * room / (hi - lo);
+					tmp2[i].w = (int16_t)(nw < 1 ? 1 : nw);
+				}
+				tmp2[i].x = (int16_t)nx;
+			}
+			draw_shapes(tmp2, n, ix, iy, t->art_h, iw, ah);
+			shift = -1;
+		}
+	}
+	if (shift < 0) {
+		/* drawn narrower above */
+	} else if (shift) {                              /* a narrow tile: the picture's middle */
+		static struct tile_shape tmp[96];
+		int n = t->n_art < 96 ? t->n_art : 96;
+		for (int i = 0; i < n; i++) {
+			tmp[i] = t->art[i];
+			if (tmp[i].kind == 0 && tmp[i].w >= art_w / 2) { tmp[i].x = 0; tmp[i].w = (int16_t)iw; continue; }
+			tmp[i].x = (int16_t)(tmp[i].x - shift);
+			if (tmp[i].kind == 0 && tmp[i].x < 0) { tmp[i].w = (int16_t)(tmp[i].w + tmp[i].x); tmp[i].x = 0; }
+		}
+		for (int i = 0; i < n; i++)
+			if (tmp[i].kind == 0 && tmp[i].w <= 0) tmp[i].w = 0;
+		draw_shapes(tmp, n, ix, iy, t->art_h, iw, ah);
+	} else {
+		draw_shapes(t->art, t->n_art, ix, iy, t->art_h, iw, ah);
+	}
 	if (t->big)                                       /* the pad over the night scene */
 		draw_pad(ix + (iw - 210) / 2, iy + ah / 2 - 40, 210);
 	fill(ix, iy + ah, iw, t->band_h, t->band);
@@ -4797,12 +5271,13 @@ static void draw_tile(const struct tile *t, bool on)
 		draw_text_fit(ix + 14, iy + ah + 8, F_TITLE, t->text, t->name, iw - 28, false);
 		draw_text_fit(ix + 14, iy + ah + 44, F_BODY, t->sub_c, t->sub, iw - 28, false);
 	} else {
-		draw_text_fit(ix + 10, iy + ah + 5, F_LIST, t->text, t->name, iw - 20, false);
+		int f = iw < 150 ? F_BODY : F_LIST;
+		draw_text_fit(ix + 10, iy + ah + (f == F_BODY ? 9 : 5), f, t->text, t->name, iw - 20, false);
 		draw_text_fit(ix + 10, iy + ah + 35, F_SMALL, t->sub_c, t->sub, iw - 20, false);
 	}
 }
 
-enum { X_GAMES, X_CONTROLS, X_PAIR, X_OFF, X_N };
+enum { X_GAMES, X_CONTROLS, X_PAIR, X_WIFI, X_OFF, X_N };
 
 /* The main menu: the chosen tile */
 static int tiles_menu(int sel)
@@ -4826,8 +5301,8 @@ static int tiles_menu(int sel)
 			dirty = true;
 			if (k == N_DOWN || k == N_DOWNF || k == N_PGDN) sel = (sel + 1) % X_N;
 			else if (k == N_UP || k == N_UPF || k == N_PGUP) sel = (sel + X_N - 1) % X_N;
-			else if (k == N_LEFT) sel = sel == X_OFF ? X_PAIR : X_GAMES;
-			else if (k == N_RIGHT) sel = sel == X_GAMES ? X_CONTROLS : sel == X_PAIR ? X_OFF : sel;
+			else if (k == N_LEFT) sel = sel == X_OFF ? X_WIFI : sel == X_WIFI ? X_PAIR : X_GAMES;
+			else if (k == N_RIGHT) sel = sel == X_GAMES ? X_CONTROLS : sel == X_PAIR ? X_WIFI : sel == X_WIFI ? X_OFF : sel;
 			else if (k == N_OK) {
 				input_settle();
 				menu_depth--;
@@ -4843,9 +5318,12 @@ static int tiles_menu(int sel)
 				pads_bt += devs[i].role == ROLE_PAD && devs[i].bus == BUS_BLUETOOTH;
 			snprintf(games_sub, sizeof games_sub, T("Gier w folderze NES: %d", "Games in the NES folder: %d"), n_games);
 			if (bt_powered == 0) snprintf(bt_sub, sizeof bt_sub, "%s", T("Wyłączony", "Switched off"));
-			else if (pads_bt) snprintf(bt_sub, sizeof bt_sub, T("Połączone pady: %d", "Pads connected: %d"), pads_bt);
-			else snprintf(bt_sub, sizeof bt_sub, "%s", T("Parowanie padów", "Pairing pads"));
-			const int gx = 24, gy = 76, gap = 14, bw = 369, sh = 169, sw = (bw - gap) / 2;
+			else if (pads_bt) snprintf(bt_sub, sizeof bt_sub, T("Pady: %d", "Pads: %d"), pads_bt);
+			else snprintf(bt_sub, sizeof bt_sub, "%s", T("Pady", "Pads"));
+			const int gx = 24, gy = 76, gap = 14, bw = 369, sh = 169, sw = (bw - 2 * gap) / 3;
+			char wifi_sub[64];
+			if (net_on()) snprintf(wifi_sub, sizeof wifi_sub, "%s", net_ip);
+			else snprintf(wifi_sub, sizeof wifi_sub, "%s", T("Gry przez WWW", "Web games"));
 			const struct tile tiles[X_N] = {
 				[X_GAMES] = {tile_games, (int)(sizeof tile_games / sizeof *tile_games), 210, 0x1b5c3c, 0x2fbf74, C_SEL_T, 0x0a3320,
 				             T("Lista gier", "Games"), games_sub, gx, gy, bw, 2 * sh + gap, 80, true},
@@ -4855,9 +5333,11 @@ static int tiles_menu(int sel)
 				                gx + bw + gap, gy, bw, sh, 62, false},
 				[X_PAIR] = {tile_bluetooth, (int)(sizeof tile_bluetooth / sizeof *tile_bluetooth), 100, 0x2c5aa8, 0x10254c, C_TEXT,
 				            0xbcd6ff, "Bluetooth", bt_sub, gx + bw + gap, gy + sh + gap, sw, sh, 62, false},
+				[X_WIFI] = {tile_wifi, (int)(sizeof tile_wifi / sizeof *tile_wifi), 100, 0x2a9d8f, 0x0b3532, C_TEXT, 0xbff0e8,
+				            "WiFi", wifi_sub, gx + bw + gap + sw + gap, gy + sh + gap, sw, sh, 62, false},
 				[X_OFF] = {tile_off, (int)(sizeof tile_off / sizeof *tile_off), 100, 0x8a2f3a, 0x34101a, C_TEXT, 0xffc4c7,
-				           T("Wyłącz radio", "Radio off"), T("Wyłącza radio", "Switches the radio off"),
-				           gx + bw + gap + sw + gap, gy + sh + gap, bw - sw - gap, sh, 62, false},
+				           T("Wyłącz", "Off"), T("Radio", "Radio"),
+				           gx + bw + gap + 2 * (sw + gap), gy + sh + gap, bw - 2 * (sw + gap), sh, 62, false},
 			};
 			panel_y = -1;
 			fill_bg(0, 0, LAND_W, LAND_H);
@@ -4899,7 +5379,7 @@ static void controls_menu(void)
 /* The main menu: the games, the controls, Bluetooth, the radio off */
 static void game_list(void)
 {
-	static const char *names[X_N] = {"games", "controls", "Bluetooth", "off"};
+	static const char *names[X_N] = {"games", "controls", "Bluetooth", "WiFi", "off"};
 	int sel = 0;
 	for (;;) {
 		scan_games();
@@ -4909,6 +5389,7 @@ static void game_list(void)
 		case X_GAMES: games_tab(); break;
 		case X_CONTROLS: controls_menu(); break;
 		case X_PAIR: bt_menu(); break;
+		case X_WIFI: wifi_menu(); break;
 		case X_OFF: leave(RB_POWER_OFF); break;
 		}
 	}

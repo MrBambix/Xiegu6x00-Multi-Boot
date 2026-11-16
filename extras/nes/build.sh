@@ -178,6 +178,12 @@ fi
 # The root filesystem
 R=$W/root
 mkdir -p "$R/sbin" "$R/nes/bt" "$R/dev" "$R/proc" "$R/sys" "$R/tmp" "$R/boot"
+mkdir -p "$R/nes/net"
+cp "$HERE/nes_net.py" "$R/nes/nes_net.py"
+# the build's mark: the update over the air compares it with the release's nes-version.txt
+BUILD_ID="${GITHUB_SHA:-local}-$(date -u +%Y%m%d%H%M)"
+echo "$BUILD_ID $(date -u +%Y-%m-%d)" > "$R/nes/build.txt"
+echo "$BUILD_ID $(date -u +%Y-%m-%d)" > "$OUT/nes-version.txt"
 cp "$W/nes" "$R/sbin/init"
 cp "$W/fceumm/Copying" "$R/nes/FCEUMM-COPYING.txt"
 cp "$TA/NOTICE" "$R/nes/TINYALSA-NOTICE.txt"

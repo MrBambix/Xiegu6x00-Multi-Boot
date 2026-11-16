@@ -22,7 +22,7 @@ MINE = sys.argv[1:]                       # this job's files: its app and the U-
 TEST = bool(re.search(r"-(test|beta|rc)", os.environ.get("GIVEN") or ""))
 # What a release holds; anything else in it (a file of an earlier way of packing, carried over) goes
 KNOWN = {"Xiegu-Multi-Patcher-Windows.zip", "Xiegu-Multi-Patcher-macOS.zip", "Xiegu-Multi-Patcher-Linux",
-         "u-boot-x6100-menu.bin"}
+         "u-boot-x6100-menu.bin", "nes-x6100-rootfs.ext4.xz", "nes-x6100-rootfs.ext4.xz.sha256", "nes-version.txt"}
 
 
 def gh(*args, check=True):
