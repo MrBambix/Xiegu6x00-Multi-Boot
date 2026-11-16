@@ -315,6 +315,8 @@ static void sound_load(void)
 	while (f && fgets(line, sizeof line, f)) {
 		if (!strncmp(line, "format=2", 8))
 			raw = true;
+		if (!strncmp(line, "aspect=", 7) && atoi(line + 7) >= 0 && atoi(line + 7) <= 2)
+			set_aspect = atoi(line + 7);      /* the picture's size, chosen in the game's menu */
 		for (int i = 0; i < SO_N; i++) {
 			size_t k = strlen(sound_opts[i].key);
 			if (!strncmp(line, sound_opts[i].key, k) && line[k] == '=') {
@@ -349,6 +351,7 @@ static bool sound_save(void)
 		return false;
 	fprintf(f, "# The game's sound on the radio (the emulator's Sound menu): the place in each list;\n"
 	           "# volume in %% (0..300), af the radio speaker's level (0..55)\nformat=2\n");
+	fprintf(f, "aspect=%d\n", set_aspect);
 	for (int i = 0; i < SO_N; i++)
 		fprintf(f, "%s=%d\n", sound_opts[i].key,
 		        i == SO_VOL ? set_volume : i == SO_AF ? set_rxvol : i == SO_MONI ? set_moni : sound_sel[i]);
@@ -833,6 +836,7 @@ struct dev {
 	uint32_t held;                     /* libretro bits */
 	bool joyclass;                     /* buttons from BTN_TRIGGER on (cheap USB pads), not BTN_SOUTH */
 	uint16_t bus;                      /* BUS_USB, BUS_BLUETOOTH */
+	char uniq[24];                     /* a Bluetooth one's address */
 	bool short_pad;                    /* no buttons 11 and 12 (BTN_SELECT, BTN_START): a 10-button layout */
 	uint32_t sel_since;                /* Select held since */
 	uint16_t vendor, product;          /* the USB/Bluetooth ids: who made it */
@@ -876,6 +880,7 @@ static void note(const char *fmt, ...)
 /* Bluetooth's state, for the status line (the session is further down) */
 static int bt_powered = -1;                 /* -1: not known / not running */
 static void bt_poll(void);
+static int bt_battery(const char *mac);
 static void test_keys(void);
 
 /* learning a pad: what came last */
@@ -1327,6 +1332,9 @@ static void open_inputs(void)
 				v->vendor = iid.vendor;
 				v->product = iid.product;
 				v->bus = iid.bustype;
+				v->uniq[0] = 0;
+				if (ioctl(fd, EVIOCGUNIQ(sizeof v->uniq - 1), v->uniq) < 0)
+					v->uniq[0] = 0;
 			}
 			unsigned char abs[ABS_MAX / 8 + 1];
 			memset(abs, 0, sizeof abs);
@@ -1621,7 +1629,14 @@ static int status_chips(int right, int y)
 			continue;
 		const char *kind = devs[i].profile ? devs[i].profile : "";
 		bool plain = !kind[0] || !strcmp(kind, "USB") || !strcmp(kind, "ogólny") || !strcmp(kind, "generic");
-		snprintf(chips[n].text, sizeof chips[n].text, plain ? "Pad%s" : "Pad %s", plain ? "" : kind);
+		int bat = bt_battery(devs[i].uniq);
+		if (bat >= 0)
+			snprintf(chips[n].text, sizeof chips[n].text, plain ? "Pad%s %d%%" : "Pad %s %d%%", plain ? "" : kind, bat);
+		else
+			snprintf(chips[n].text, sizeof chips[n].text, plain ? "Pad%s" : "Pad %s", plain ? "" : kind);
+		if (bat >= 0 && bat <= 15)
+			chips[n].col = C_RED;
+		else
 		chips[n].col = C_ACCENT;
 		chips[n].sign = devs[i].bus == BUS_BLUETOOTH;
 		bt_pad |= chips[n].sign;
@@ -2415,7 +2430,8 @@ static void cb_video(const void *data, unsigned w, unsigned h, size_t pitch)
 static void setup_maps(void)
 {
 	gh = LAND_H;
-	gw = set_aspect ? LAND_H * 4 / 3 : (int)(frame_w * (LAND_H / frame_h ? LAND_H / frame_h : 1));
+	gw = set_aspect == 2 ? LAND_W : set_aspect ? LAND_H * 4 / 3
+	     : (int)(frame_w * (LAND_H / frame_h ? LAND_H / frame_h : 1));
 	if (gw > LAND_W)
 		gw = LAND_W;
 	if (!set_aspect && frame_h * 2 <= LAND_H)
@@ -3100,6 +3116,8 @@ struct btdev {
 	char mac[18], name[64], icon[32];
 	bool paired, trusted, connected, seen;
 	bool name_from_name;                 /* the device's own name, not an alias */
+	int battery;                         /* per cent + 1 as BlueZ gives it; 0: not known */
+	bool low_told;
 	uint32_t asked;                      /* when its info was last asked for */
 };
 static struct btdev btd[MAX_BT];
@@ -3191,6 +3209,15 @@ static void bt_set(struct btdev *d, const char *key, const char *val)
 		if (op_state == 1 && !strcasecmp(op_mac, d->mac)) {
 			if (op_kind == OP_CONNECT && yes) op_state = 2;
 			if (op_kind == OP_DISCONNECT && !yes) op_state = 2;
+		}
+	} else if (!strcmp(key, "Battery Percentage")) {          /* "0x45 (69)" */
+		const char *o = strchr(val, '(');
+		int v = o ? atoi(o + 1) : (int)strtol(val, NULL, 0);
+		if (v >= 0 && v <= 100) {
+			if (d->battery != v + 1)
+				logmsg("bt: %s battery %d %%", d->mac, v);
+			d->battery = v + 1;
+			if (v > 20) d->low_told = false;
 		}
 	} else if (!strcmp(key, "RSSI") || !strcmp(key, "TxPower") || !strcmp(key, "ManufacturerData"))
 		d->seen = true;
@@ -3483,6 +3510,30 @@ static void bt_poll(void)
 		}
 	}
 	bt_prompt();
+	/* the connected ones asked now and then: their batteries; a low one said once */
+	static uint32_t asked;
+	if (now_ms() - asked > 60000) {
+		asked = now_ms();
+		for (int i = 0; i < n_btd; i++)
+			if (btd[i].connected)
+				bt_send("info %.17s", btd[i].mac);
+	}
+	for (int i = 0; i < n_btd; i++)
+		if (btd[i].connected && btd[i].battery && btd[i].battery - 1 <= 15 && !btd[i].low_told) {
+			btd[i].low_told = true;
+			note(T("Bateria pada: %d %%", "Pad battery: %d %%"), btd[i].battery - 1);
+		}
+}
+
+/* A Bluetooth pad's battery in per cent by its address (the input device's "uniq"); -1: not known */
+static int bt_battery(const char *mac)
+{
+	if (!mac[0])
+		return -1;
+	for (int i = 0; i < n_btd; i++)
+		if (!strcasecmp(btd[i].mac, mac))
+			return btd[i].battery - 1;
+	return -1;
 }
 
 /* The pairings to the emulator's partition (a moment after BlueZ wrote them) */
@@ -4002,7 +4053,7 @@ static void __attribute__((unused)) sound_menu(bool overlay)   /* hidden for now
 }
 
 /* What the in-game menu can do */
-enum { M_RESUME, M_RESET, M_VOLUME, M_SAVE, M_LOAD, M_PAIR, M_LIST, M_OFF, M_N };
+enum { M_RESUME, M_RESET, M_VOLUME, M_ASPECT, M_SAVE, M_LOAD, M_PAIR, M_LIST, M_OFF, M_N };
 
 static bool state_exists(int slot)
 {
@@ -4016,8 +4067,10 @@ static int game_menu(void)
 {
 	char vol[64];
 	snprintf(vol, sizeof vol, T("Głośność: %d z 55  (gałka VOL)", "Volume: %d of 55  (VOL knob)"), set_rxvol);
+	const char *pic = set_aspect == 2 ? T("Obraz: cały ekran", "Picture: the whole screen")
+	                  : set_aspect ? T("Obraz: 4:3", "Picture: 4:3") : T("Obraz: 2x (ostry)", "Picture: 2x (sharp)");
 	const char *items[M_N] = {
-		T("Wróć do gry", "Back to the game"), T("Zacznij grę od nowa", "Start the game again"), vol,
+		T("Wróć do gry", "Back to the game"), T("Zacznij grę od nowa", "Start the game again"), vol, pic,
 		T("Zapisz stan", "Save state"),
 		state_exists(0) ? T("Wczytaj stan", "Load state") : T("Wczytaj stan (brak)", "Load state (none)"),
 		T("Bluetooth", "Bluetooth"), T("Wyjdź z gry (menu emulatora)", "Leave the game (the emulator's menu)"),
@@ -4168,6 +4221,12 @@ static void play(int idx)
 				break;
 
 
+			case M_ASPECT:                    /* the next size, at once; the menu again */
+				set_aspect = (set_aspect + 1) % 3;
+				sound_save();
+				mapped_w = 0;                 /* the maps made again */
+				want_menu = true;
+				break;
 			case M_PAIR: bt_menu(); break;
 			case M_LIST: save_state(9); done = true; break;
 			case M_OFF: leave(RB_POWER_OFF); break;
@@ -4629,14 +4688,14 @@ static void read_settings(void)
 		else if (sscanf(line, " sndstart = %d", &v) == 1 && v >= 1 && v <= 16) set_sndstart = v;
 		else if (sscanf(line, " sndrestart = %d", &v) == 1) set_sndrestart = v != 0;
 		else if (sscanf(line, " bluetooth = %d", &v) == 1) set_bluetooth = v != 0;
-		else if (sscanf(line, " aspect = %15s", s) == 1) set_aspect = !strcmp(s, "4:3");
+		else if (sscanf(line, " aspect = %15s", s) == 1) set_aspect = !strcmp(s, "full") ? 2 : !strcmp(s, "4:3");
 		else if (sscanf(line, " lang = %15s", s) == 1) set_en = !strcmp(s, "en");
 		else if (sscanf(line, " mouse = %d", &v) == 1 && v >= 10 && v <= 500) set_mouse = v;
 	}
 	if (f)
 		fclose(f);
 	logmsg("settings: volume=%d rxvol=%d bluetooth=%d aspect=%s lang=%s", set_volume, set_rxvol,
-	       set_bluetooth, set_aspect ? "4:3" : "2x", set_en ? "en" : "pl");
+	       set_bluetooth, set_aspect == 2 ? "full" : set_aspect ? "4:3" : "2x", set_en ? "en" : "pl");
 }
 
 static void as_init(void)

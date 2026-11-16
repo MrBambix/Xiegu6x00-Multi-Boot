@@ -104,7 +104,8 @@ def main():
             for l in ["Device %s (public)" % a, "\tName: %s" % d["name"] if d["name"] else "\tAlias: %s" % a.replace(":", "-"),
                       "\tIcon: %s" % d["icon"] if d["icon"] else "\tClass: 0x00000000",
                       "\tPaired: %s" % ("yes" if d["paired"] else "no"), "\tTrusted: %s" % ("yes" if d["trusted"] else "no"),
-                      "\tConnected: %s" % ("yes" if d["conn"] else "no")]:
+                      "\tConnected: %s" % ("yes" if d["conn"] else "no")] + (
+                          ["\tBattery Percentage: 0x45 (69)"] if d["icon"] == "input-gaming" else []):
                 say(l, prompt=False)
             out.write(P); out.flush()
         elif c == "scan":

@@ -471,7 +471,8 @@ EN = {
     "# Glosnosc glosnika radia (AF) 0..55": "# The radio's speaker (AF) volume 0..55",
     "# Glosnosc (AF) 0..55, galka VOL": "# Volume (AF) 0..55, the VOL knob",
     "# Wycisz odbiornik radia (szum w tle); 0: zostaw jak byl": "# Mute the radio's receiver (the background hiss); 0: leave it as it was",
-    "# Obraz: 2x (ostry, 512x448) albo 4:3 (640x480)": "# Picture: 2x (sharp, 512x448) or 4:3 (640x480)",
+    "# Obraz: 2x (ostry, 512x448), 4:3 (640x480) albo full (caly ekran)":
+        "# Picture: 2x (sharp, 512x448), 4:3 (640x480) or full (the whole screen)",
     "# Bluetooth: pady, klawiatury i myszy (0: wylaczony)": "# Bluetooth: pads, keyboards and mice (0: off)",
     "# Szybkosc myszy jako pistoletu Zapper 10..500 (%)": "# The mouse's speed as the Zapper light gun 10..500 (%)",
     "# Jezyk menu emulatora: pl albo en": "# The emulator's menu language: pl or en",
@@ -557,7 +558,7 @@ Gra
 
 Ustawienia
   Plik nes.txt na partycji BOOT: volume= (0–200 %), rxvol= (0–55) głośnik radia,
-  aspect=2x (ostry obraz) albo aspect=4:3, mouse= szybkość myszy jako Zappera (10–500 %),
+  aspect=2x (ostry obraz), aspect=4:3 albo aspect=full (cały ekran), mouse= szybkość myszy jako Zappera (10–500 %),
   bluetooth=0 wyłącza BT, lang=pl lub en.
   Dziennik: nes-log.txt na partycji BOOT.
 """,
@@ -629,7 +630,7 @@ Playing
 
 Settings
   The nes.txt file on the BOOT partition: volume= (0–200 %), rxvol= (0–55) the radio's speaker,
-  aspect=2x (sharp) or aspect=4:3, mouse= the mouse's speed as the Zapper (10–500 %),
+  aspect=2x (sharp), aspect=4:3 or aspect=full (the whole screen), mouse= the mouse's speed as the Zapper (10–500 %),
   bluetooth=0 switches BT off, lang=pl or en.
   Log: nes-log.txt on the BOOT partition.
 """,
