@@ -96,7 +96,9 @@ enum {
 #define BIT(j) (1u << (j))
 
 /* What the menus hear */
-enum nav { N_NONE, N_UP, N_DOWN, N_LEFT, N_RIGHT, N_OK, N_BACK, N_MENU };
+enum nav { N_NONE, N_UP, N_DOWN, N_LEFT, N_RIGHT, N_OK, N_BACK, N_MENU,
+           N_UPF, N_DOWNF,               /* a direction held long in a long list: nav_fast lines at once */
+           N_PGUP, N_PGDN };             /* a page (the VFO knob in a long list, Page Up / Down) */
 
 /* The kernel's buffers to the card. Not sync(): FCEUmm has a global variable of that name, which
  * the static link took for the C library's function (the call jumped into its data) */
@@ -826,6 +828,7 @@ struct dev {
 	struct padmap map;
 	uint32_t held;                     /* libretro bits */
 	bool joyclass;                     /* buttons from BTN_TRIGGER on (cheap USB pads), not BTN_SOUTH */
+	uint16_t bus;                      /* BUS_USB, BUS_BLUETOOTH */
 	bool short_pad;                    /* no buttons 11 and 12 (BTN_SELECT, BTN_START): a 10-button layout */
 	uint32_t sel_since;                /* Select held since */
 	uint16_t vendor, product;          /* the USB/Bluetooth ids: who made it */
@@ -848,7 +851,9 @@ static bool want_menu;                      /* the emulator's menu asked for */
 static enum nav navq[32];
 static unsigned nav_w, nav_r;
 static uint32_t prev_nav_bits;
-static uint32_t repeat_at;
+static uint32_t repeat_at, hold_since;
+static bool nav_pages;                      /* a long list is on the screen: held keys speed up, VFO pages */
+static int nav_fast = 5;
 static bool quick_save, quick_load;
 static int menu_mouse;                      /* the mouse's way up and down, for the menus */
 static int menu_depth;                      /* a menu or a message on the screen (MFK pressed: OK) */
@@ -1317,6 +1322,7 @@ static void open_inputs(void)
 			if (ioctl(fd, EVIOCGID, &iid) == 0) {
 				v->vendor = iid.vendor;
 				v->product = iid.product;
+				v->bus = iid.bustype;
 			}
 			unsigned char abs[ABS_MAX / 8 + 1];
 			memset(abs, 0, sizeof abs);
@@ -1362,8 +1368,8 @@ static void knob(int axis, int value)
 		af_steps -= value;                    /* its encoder counts the other way: right is louder */
 		return;
 	}
-	if (axis == 0)                            /* VFO, MFK: the menus */
-		nav_push(value > 0 ? N_DOWN : N_UP);
+	if (axis == 0)                            /* VFO, MFK: the menus (VFO: a page of a long list) */
+		nav_push(nav_pages ? (value > 0 ? N_PGDN : N_PGUP) : (value > 0 ? N_DOWN : N_UP));
 	else
 		nav_push(value > 0 ? N_UP : N_DOWN);
 	if (axis == 2)                            /* MFK: nothing more in the game */
@@ -1464,8 +1470,8 @@ static void poll_input(void)
 				if (ev.type == EV_KEY && (ev.value == 0 || ev.value == 1)) {
 					if (ev.code == KEY_F2 && ev.value) quick_save = true;
 					if (ev.code == KEY_F4 && ev.value) quick_load = true;
-					if (ev.code == KEY_PAGEUP && ev.value) nav_push(N_LEFT);
-					if (ev.code == KEY_PAGEDOWN && ev.value) nav_push(N_RIGHT);
+					if (ev.code == KEY_PAGEUP && ev.value) nav_push(N_PGUP);
+					if (ev.code == KEY_PAGEDOWN && ev.value) nav_push(N_PGDN);
 					int j = kb_key(ev.code);
 					if (j >= 0)
 						kb_bits = ev.value ? kb_bits | BIT(j) : kb_bits & ~BIT(j);
@@ -1545,11 +1551,20 @@ static void poll_input(void)
 			want_menu = true;
 	}
 	uint32_t dirs = nb & (BIT(J_UP) | BIT(J_DOWN));
-	if (pressed & dirs)
+	if (pressed & dirs) {
 		repeat_at = t + 400;
-	else if (dirs && (int32_t)(t - repeat_at) >= 0) {
+		hold_since = t;
+	} else if (dirs && (int32_t)(t - repeat_at) >= 0) {
+		/* held: line by line, and in a long list faster the longer it is held */
+		uint32_t held = t - hold_since;
+		bool up = dirs & BIT(J_UP);
 		repeat_at = t + 110;
-		nav_push(dirs & BIT(J_UP) ? N_UP : N_DOWN);
+		if (nav_pages && held > 1500) {
+			nav_fast = held > 6000 ? 50 : held > 3500 ? 20 : 5;
+			nav_push(up ? N_UPF : N_DOWNF);
+		} else {
+			nav_push(up ? N_UP : N_DOWN);
+		}
 	}
 	prev_nav_bits = nb;
 	static int prev_btn;
@@ -1580,33 +1595,55 @@ static void idle(unsigned ms)
 /* Menus                                                                                      */
 /* ------------------------------------------------------------------------------------------ */
 /* What is connected, as chips at the top right: the width they took */
+/* The Bluetooth sign, 14x18 */
+static void draw_bt_sign(int x, int y, uint32_t c)
+{
+	static const char *rows[9] = {"..#....", "..##...", "#.#.#..", ".###...", "..#....", ".###...", "#.#.#..", "..##...", "..#...."};
+	for (int j = 0; j < 9; j++)
+		for (int i = 0; i < 7; i++)
+			if (rows[j][i] == '#')
+				fill(x + i * 2, y + j * 2, 2, 2, c);
+}
+
+/* The top bar's chips, from the right: each pad by its kind (a Bluetooth one with the sign), the
+ * keyboard, the mouse, Bluetooth alone when it is on with no pad on it */
 static int status_chips(int right, int y)
 {
-	int pads = 0;
-	bool kb = false, mouse = false;
+	struct { char text[40]; uint32_t col; bool sign; } chips[6];
+	int n = 0;
+	bool kb = false, mouse = false, bt_pad = false;
+	for (int i = 0; i < n_devs && n < 2; i++) {
+		if (devs[i].role != ROLE_PAD)
+			continue;
+		const char *kind = devs[i].profile ? devs[i].profile : "";
+		bool plain = !kind[0] || !strcmp(kind, "USB") || !strcmp(kind, "ogólny") || !strcmp(kind, "generic");
+		snprintf(chips[n].text, sizeof chips[n].text, plain ? "Pad%s" : "Pad %s", plain ? "" : kind);
+		chips[n].col = C_ACCENT;
+		chips[n].sign = devs[i].bus == BUS_BLUETOOTH;
+		bt_pad |= chips[n].sign;
+		n++;
+	}
 	for (int i = 0; i < n_devs; i++) {
-		pads += devs[i].role == ROLE_PAD;
 		kb |= devs[i].role == ROLE_KEYBOARD;
 		mouse |= devs[i].role == ROLE_MOUSE;
 	}
-	const char *chips[4];
-	uint32_t col[4];
-	int n = 0;
-	char p[24];
-	if (pads) {
-		snprintf(p, sizeof p, pads > 1 ? "PAD ×%d" : "PAD", pads);
-		chips[n] = p;
-		col[n++] = C_ACCENT;
-	}
-	if (kb) { chips[n] = T("KLAWIATURA", "KEYBOARD"); col[n++] = C_TEXT; }
-	if (mouse) { chips[n] = T("MYSZ", "MOUSE"); col[n++] = C_TEXT; }
-	if (bt_powered >= 0) { chips[n] = bt_powered ? "BT" : T("BT wył.", "BT off"); col[n++] = bt_powered ? C_BLUE : C_DIM; }
+	if (kb) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("Klawiatura", "Keyboard")); chips[n].col = C_TEXT; chips[n++].sign = false; }
+	if (mouse) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("Mysz", "Mouse")); chips[n].col = C_TEXT; chips[n++].sign = false; }
+	if (bt_powered == 0) { snprintf(chips[n].text, sizeof chips[n].text, "%s", T("wył.", "off")); chips[n].col = C_DIM; chips[n++].sign = true; }
+	else if (bt_powered > 0 && !bt_pad) { chips[n].text[0] = 0; chips[n].col = C_BLUE; chips[n++].sign = true; }
 	int x = right;
 	for (int i = n - 1; i >= 0; i--) {
-		int w = text_w(F_SMALL, chips[i]) + 18;
+		int tw = chips[i].text[0] ? text_w(F_SMALL, chips[i].text) : 0;
+		int w = tw + 18 + (chips[i].sign ? (tw ? 20 : 14) : 0);
 		x -= w;
 		box(x, y, w, 24, 12, C_BAR, C_LINE);
-		draw_text(x + 9, y + 3, F_SMALL, col[i], chips[i]);
+		int tx = x + 9;
+		if (chips[i].sign) {
+			draw_bt_sign(tx, y + 3, bt_powered == 0 ? C_DIM : C_BLUE);
+			tx += 20;
+		}
+		if (tw)
+			draw_text(tx, y + 3, F_SMALL, chips[i].col, chips[i].text);
 		x -= 8;
 	}
 	return right - x;
@@ -1624,7 +1661,20 @@ struct list_view {
 	bool overlay;
 	void (*side)(int sel, int x, int y, int w, int h);   /* a panel beside the list (the game list's) */
 	bool dimmed;
+	bool letters;                         /* left and right jump to the next letter (the game list) */
+	uint32_t jump_until;                  /* a jump just made: the letter and the place shown till then */
 };
+
+static int list_games;                  /* the game list is on the screen: how many games */
+
+/* The letter a line files under */
+static char line_letter(const char *s)
+{
+	const char *sl = strrchr(s, '/');
+	unsigned char c = (unsigned char)(sl ? sl[1] : s[0]);
+	c = (unsigned char)toupper(c);
+	return c >= 'A' && c <= 'Z' ? (char)c : '#';
+}
 
 #define ROW   44
 #define OROW  34
@@ -1713,6 +1763,18 @@ static void draw_list(struct list_view *v)
 	}
 	if (v->side)
 		v->side(v->sel, x + w + 16, y, LAND_W - (x + w + 16) - 20, rows * rh);
+	if (v->jump_until && v->n) {              /* a jump: where it landed, large */
+		int bw = 156, bh = 156, bx = x + (w - bw) / 2, by = y + (rows * rh - bh) / 2;
+		char l[2] = {line_letter(v->items[v->sel]), 0}, place[48];
+		rrect_a(bx + 4, by + 8, bw, bh, 26, 0x000000, 150);
+		box(bx, by, bw, bh, 26, C_BAR, C_ACCENT);
+		draw_text(bx + (bw - text_w(F_HUGE, l)) / 2, by + 14, F_HUGE, C_ACCENT, l);
+		snprintf(place, sizeof place, T("%d z %d", "%d of %d"), v->sel + 1, v->n);
+		draw_text(bx + (bw - text_w(F_SMALL, place)) / 2, by + 100, F_SMALL, C_TEXT, place);
+		rrect(bx + 28, by + 130, bw - 56, 6, 3, C_LINE);
+		int knob_w = 22, span = bw - 56 - knob_w;
+		rrect(bx + 28 + (v->n > 1 ? span * v->sel / (v->n - 1) : 0), by + 130, knob_w, 6, 3, C_ACCENT);
+	}
 	fill(0, LAND_H - 42, LAND_W, 42, C_BAR);
 	fill(0, LAND_H - 42, LAND_W, 1, C_LINE);
 	if (v->hint)
@@ -1734,8 +1796,25 @@ static int list_step(struct list_view *v, bool *dirty)
 		}
 		if (k == N_UP) v->sel = v->sel > 0 ? v->sel - 1 : v->n - 1;
 		else if (k == N_DOWN) v->sel = v->sel < v->n - 1 ? v->sel + 1 : 0;
-		else if (k == N_LEFT) v->sel = v->sel - rows > 0 ? v->sel - rows : 0;
-		else if (k == N_RIGHT) v->sel = v->sel + rows < v->n ? v->sel + rows : v->n - 1;
+		else if (k == N_UPF) v->sel = v->sel - nav_fast > 0 ? v->sel - nav_fast : 0;
+		else if (k == N_DOWNF) v->sel = v->sel + nav_fast < v->n ? v->sel + nav_fast : v->n - 1;
+		else if (v->letters && k == N_RIGHT) {            /* the next letter's first */
+			char c = line_letter(v->items[v->sel]);
+			int i = v->sel + 1;
+			while (i < v->n && line_letter(v->items[i]) == c) i++;
+			if (i < v->n) v->sel = i;
+		} else if (v->letters && k == N_LEFT) {           /* this letter's first, then the one before's */
+			char c = line_letter(v->items[v->sel]);
+			int i = v->sel;
+			while (i > 0 && line_letter(v->items[i - 1]) == c) i--;
+			if (i == v->sel && i > 0) {
+				c = line_letter(v->items[--i]);
+				while (i > 0 && line_letter(v->items[i - 1]) == c) i--;
+			}
+			v->sel = i;
+		}
+		else if (k == N_LEFT || k == N_PGUP) v->sel = v->sel - rows > 0 ? v->sel - rows : 0;
+		else if (k == N_RIGHT || k == N_PGDN) v->sel = v->sel + rows < v->n ? v->sel + rows : v->n - 1;
 		else if (k == N_OK) return v->sel;
 		else if (k == N_BACK || k == N_MENU) return -2;
 	}
@@ -1764,12 +1843,16 @@ static void move_long(const struct list_view *v, uint32_t *last)
 static int menu_ex(const char *title, const char *const *items, int n, int sel, const char *hint, bool overlay,
                    void (*side)(int, int, int, int, int))
 {
-	struct list_view v = {title, items, n, sel < 0 || sel >= n ? 0 : sel, 0, hint, NULL, overlay, side, false};
+	struct list_view v = {title, items, n, sel < 0 || sel >= n ? 0 : sel, 0, hint, NULL, overlay, side, false,
+	                      false, 0};
 	bool dirty = true;
 	uint32_t drawn = 0, moved = 0;
+	bool longlist = !overlay && n > 8;
+	v.letters = longlist && side != NULL && list_games > 0;
 	input_settle();
 	menu_depth++;
 	for (;;) {
+		nav_pages = longlist;
 		poll_input();
 		int old = v.sel, old_top = v.top;
 		int c = list_step(&v, &dirty);
@@ -1777,7 +1860,15 @@ static int menu_ex(const char *title, const char *const *items, int n, int sel, 
 		if (c != -1) {
 			input_settle();
 			menu_depth--;
+			nav_pages = false;
 			return c == -2 ? -1 : c;
+		}
+		int far = v.sel - old;
+		if (longlist && (far > 1 || far < -1) && far != v.n - 1 && far != 1 - v.n)
+			v.jump_until = now_ms() + 900;        /* more than a line: where it landed */
+		else if (v.jump_until && (int32_t)(now_ms() - v.jump_until) >= 0) {
+			v.jump_until = 0;
+			dirty = true;
 		}
 		if (dirty && !side && v.sel != old) {     /* only the two lines that changed */
 			int x, y, w, rows, rh;
@@ -1798,6 +1889,7 @@ static int menu_ex(const char *title, const char *const *items, int n, int sel, 
 		}
 		if (test_mode && !keys_scripted()) {
 			menu_depth--;
+			nav_pages = false;
 			return v.sel;
 		}
 		if (menu_tick)
@@ -1890,6 +1982,8 @@ static void message(const char *title, const char *const *lines, int n, unsigned
 
 static const char *HINT_LIST_PL = "MFK / F1 / A: wybierz  F2 / B / GEN: wstecz";
 static const char *HINT_LIST_EN = "MFK / F1 / A: choose  F2 / B / GEN: back";
+static const char *HINT_GAMES_PL = "▲▼ dłużej: szybciej  ◀ ▶: litera  VFO: strona  F1 / A: graj  F2 / B: wstecz";
+static const char *HINT_GAMES_EN = "▲▼ held: faster  ◀ ▶: letter  VFO: page  F1 / A: play  F2 / B: back";
 
 /* ------------------------------------------------------------------------------------------ */
 /* Sound                                                                                      */
@@ -3387,7 +3481,7 @@ static void bt_scan(void)
 	                        "kilka sekund). Pojawi się na tej liście.",
 	                        "Put the device in pairing mode (a pad: usually hold its pairing button a few seconds). "
 	                        "It shows up in this list."),
-	                      false, NULL, false};
+	                      false, NULL, false, false, 0};
 	uint32_t drawn = 0;
 	input_settle();
 	menu_depth++;
@@ -3975,7 +4069,6 @@ static void play(int idx)
 }
 
 /* Beside the game list: the chosen game (its saves, its size), or what the chosen thing does */
-static int list_games;
 
 /* A game's picture: a file of the game's name with .png, .jpg or .bmp beside it, or in the
  * NES/IMG folder. One kept, fitted to the side panel, so the list stays quick. */
@@ -4143,7 +4236,8 @@ static void games_tab(void)
 		char title[64];
 		snprintf(title, sizeof title, T("Lista gier (%d)", "Games (%d)"), n_games);
 		list_games = n_games;
-		int c = menu_ex(title, (const char *const *)game_names, n_games, sel, set_en ? HINT_LIST_EN : HINT_LIST_PL,
+		int c = menu_ex(title, (const char *const *)game_names, n_games, sel,
+		                n_games > 8 ? (set_en ? HINT_GAMES_EN : HINT_GAMES_PL) : (set_en ? HINT_LIST_EN : HINT_LIST_PL),
 		                false, game_side);
 		if (c < 0)
 			return;
@@ -4156,31 +4250,160 @@ static void games_tab(void)
 	}
 }
 
-/* The main menu: the games, Bluetooth, the pad's buttons, the controls, the radio off */
+/* The main menu's tiles: each a picture (tiles_art.h) over a band with its name */
+#include "tiles_art.h"
+
+static void draw_shapes(const struct tile_shape *sh, int n, int ox, int oy, int art_h, int w, int h)
+{
+	for (int i = 0; i < n; i++) {
+		const struct tile_shape *q = &sh[i];
+		if (q->kind == 0) {                           /* scaled down or up to the room's height, cut at its width */
+			int x0 = q->x, x1 = q->x + q->w, y0 = q->y * h / art_h, y1 = (q->y + q->h) * h / art_h;
+			if (x1 > w) x1 = w;
+			if (y1 > h) y1 = h;
+			if (x1 > x0 && y1 > y0)
+				fill(ox + x0, oy + y0, x1 - x0, y1 - y0, q->c);
+		} else if (q->kind == 1) {
+			int cy = q->y * h / art_h;
+			if (q->x + q->w <= w)
+				rrect(ox + q->x - q->w, oy + cy - q->w, 2 * q->w, 2 * q->w, q->w, q->c);
+		} else {
+			char l[2] = {(char)q->h, 0};
+			draw_text(ox + q->x - text_w(F_SMALL, l) / 2, oy + q->y * h / art_h - faces[F_SMALL].ascent + 1, F_SMALL, q->c, l);
+		}
+	}
+}
+
+struct tile {
+	const struct tile_shape *art;
+	int n_art, art_h;
+	uint32_t border, band, text, sub_c;
+	const char *name, *sub;
+	int x, y, w, h, band_h;
+	bool big;
+};
+
+static void draw_tile(const struct tile *t, bool on)
+{
+	if (on)
+		rrect(t->x - 4, t->y - 4, t->w + 8, t->h + 8, 14, 0x1f7a4d);       /* the chosen one: a green ring */
+	rrect(t->x, t->y, t->w, t->h, 10, on ? 0xa8f5cd : t->border);
+	int ix = t->x + 4, iy = t->y + 4, iw = t->w - 8, ih = t->h - 8, ah = ih - t->band_h;
+	draw_shapes(t->art, t->n_art, ix, iy, t->art_h, iw, ah);
+	if (t->big)                                       /* the pad over the night scene */
+		draw_pad(ix + (iw - 210) / 2, iy + ah / 2 - 40, 210);
+	fill(ix, iy + ah, iw, t->band_h, t->band);
+	if (t->big) {
+		draw_text_fit(ix + 14, iy + ah + 8, F_TITLE, t->text, t->name, iw - 28, false);
+		draw_text_fit(ix + 14, iy + ah + 44, F_BODY, t->sub_c, t->sub, iw - 28, false);
+	} else {
+		draw_text_fit(ix + 10, iy + ah + 5, F_LIST, t->text, t->name, iw - 20, false);
+		draw_text_fit(ix + 10, iy + ah + 35, F_SMALL, t->sub_c, t->sub, iw - 20, false);
+	}
+}
+
+enum { X_GAMES, X_CONTROLS, X_PAIR, X_OFF, X_N };
+
+/* The main menu: the chosen tile */
+static int tiles_menu(int sel)
+{
+	char games_sub[64], bt_sub[64];
+	int pads_bt = 0;
+	bool dirty = true;
+	uint32_t drawn = 0;
+	input_settle();
+	menu_depth++;
+	nav_pages = false;
+	for (;;) {
+		poll_input();
+		enum nav k;
+		while ((k = nav_pop()) != N_NONE) {
+			dirty = true;
+			if (k == N_DOWN || k == N_DOWNF || k == N_PGDN) sel = (sel + 1) % X_N;
+			else if (k == N_UP || k == N_UPF || k == N_PGUP) sel = (sel + X_N - 1) % X_N;
+			else if (k == N_LEFT) sel = sel == X_OFF ? X_PAIR : X_GAMES;
+			else if (k == N_RIGHT) sel = sel == X_GAMES ? X_CONTROLS : sel == X_PAIR ? X_OFF : sel;
+			else if (k == N_OK) {
+				input_settle();
+				menu_depth--;
+				return sel;
+			}
+		}
+		want_menu = false;
+		if (dirty || now_ms() - drawn > 1000) {
+			dirty = false;
+			drawn = now_ms();
+			pads_bt = 0;
+			for (int i = 0; i < n_devs; i++)
+				pads_bt += devs[i].role == ROLE_PAD && devs[i].bus == BUS_BLUETOOTH;
+			snprintf(games_sub, sizeof games_sub, T("Gier w folderze NES: %d", "Games in the NES folder: %d"), n_games);
+			if (bt_powered == 0) snprintf(bt_sub, sizeof bt_sub, "%s", T("Wyłączony", "Switched off"));
+			else if (pads_bt) snprintf(bt_sub, sizeof bt_sub, T("Połączone pady: %d", "Pads connected: %d"), pads_bt);
+			else snprintf(bt_sub, sizeof bt_sub, "%s", T("Parowanie padów", "Pairing pads"));
+			const int gx = 24, gy = 76, gap = 14, bw = 369, sh = 169, sw = (bw - gap) / 2;
+			const struct tile tiles[X_N] = {
+				[X_GAMES] = {tile_games, (int)(sizeof tile_games / sizeof *tile_games), 210, 0x1b5c3c, 0x2fbf74, C_SEL_T, 0x0a3320,
+				             T("Lista gier", "Games"), games_sub, gx, gy, bw, 2 * sh + gap, 80, true},
+				[X_CONTROLS] = {tile_controls, (int)(sizeof tile_controls / sizeof *tile_controls), 100, 0x9a6f1f, 0x3a2808, C_TEXT,
+				                0xffe3a3, T("Sterowanie", "Controls"),
+				                T("Klawisze radia, klawiatura, przyciski pada", "The radio's keys, the keyboard, pad buttons"),
+				                gx + bw + gap, gy, bw, sh, 62, false},
+				[X_PAIR] = {tile_bluetooth, (int)(sizeof tile_bluetooth / sizeof *tile_bluetooth), 100, 0x2c5aa8, 0x10254c, C_TEXT,
+				            0xbcd6ff, "Bluetooth", bt_sub, gx + bw + gap, gy + sh + gap, sw, sh, 62, false},
+				[X_OFF] = {tile_off, (int)(sizeof tile_off / sizeof *tile_off), 100, 0x8a2f3a, 0x34101a, C_TEXT, 0xffc4c7,
+				           T("Wyłącz radio", "Radio off"), T("Wyłącza radio", "Switches the radio off"),
+				           gx + bw + gap + sw + gap, gy + sh + gap, bw - sw - gap, sh, 62, false},
+			};
+			panel_y = -1;
+			fill_bg(0, 0, LAND_W, LAND_H);
+			fill(0, 0, LAND_W, 62, C_BAR);
+			fill(0, 62, LAND_W, 1, C_LINE);
+			int cw = status_chips(LAND_W - 20, 19);
+			rrect(24, 14, 34, 34, 9, C_RED);                   /* the d-pad mark */
+			fill(38, 22, 6, 18, 0xffffff);
+			fill(32, 28, 18, 6, 0xffffff);
+			draw_text_fit(70, 13, F_TITLE, C_TEXT, T("Emulator NES", "NES emulator"), LAND_W - 110 - cw, false);
+			for (int i = 0; i < X_N; i++)
+				if (i != sel)
+					draw_tile(&tiles[i], false);
+			draw_tile(&tiles[sel], true);
+			fill(0, LAND_H - 42, LAND_W, 42, C_BAR);
+			fill(0, LAND_H - 42, LAND_W, 1, C_LINE);
+			key_chips(24, LAND_H - 32, LAND_W - 20,
+			          T("MFK / krzyżak: kafelek  MFK / F1 / A: otwórz", "MFK / d-pad: tile  MFK / F1 / A: open"));
+			present(0, 0, LAND_W, LAND_H);
+		}
+		if (test_mode && !keys_scripted()) {
+			menu_depth--;
+			return sel;
+		}
+		idle(10);
+	}
+}
+
+/* The controls: what the keys do, and a pad's own layout */
+static void controls_menu(void)
+{
+	const char *it[] = {T("Klawisze i sterowanie", "Keys and controls"),
+	                    T("Przyciski pada: własny układ", "Pad buttons: a layout of your own")};
+	int c = menu(T("Sterowanie", "Controls"), it, 2, 0, set_en ? HINT_LIST_EN : HINT_LIST_PL, false);
+	if (c == 0) help();
+	else if (c == 1) learn_pad();
+}
+
+/* The main menu: the games, the controls, Bluetooth, the radio off */
 static void game_list(void)
 {
+	static const char *names[X_N] = {"games", "controls", "Bluetooth", "off"};
 	int sel = 0;
 	for (;;) {
 		scan_games();
-		enum { X_GAMES, X_PAIR, X_PAD, X_HELP, X_OFF, X_N };
-		char games_item[64];
-		snprintf(games_item, sizeof games_item, T("Lista gier (%d)", "Games (%d)"), n_games);
-		const char *items[X_N] = {
-			games_item, "Bluetooth", T("Przyciski pada", "Pad buttons"), T("Sterowanie", "Controls"),
-			T("Wyłącz radio", "Switch the radio off"),
-		};
-		list_games = -1;                              /* the panel beside: what each item does */
-		int c = menu_ex(T("Emulator NES", "NES emulator"), items, X_N, sel, set_en ? HINT_LIST_EN : HINT_LIST_PL,
-		                false, game_side);
-		if (c < 0)
-			continue;
-		sel = c;
-		logmsg("menu: chose %s", items[c]);
-		switch (c) {
+		sel = tiles_menu(sel);
+		logmsg("menu: chose %s", names[sel]);
+		switch (sel) {
 		case X_GAMES: games_tab(); break;
+		case X_CONTROLS: controls_menu(); break;
 		case X_PAIR: bt_menu(); break;
-		case X_PAD: learn_pad(); break;
-		case X_HELP: help(); break;
 		case X_OFF: leave(RB_POWER_OFF); break;
 		}
 	}

@@ -135,7 +135,13 @@ def main():
     if TEST:
         title = "TEST (pre-release) " + tag + " · " + title
     have = tag_commit(tag)
-    if have and have != SHA:
+    if have and have != SHA and TEST:
+        # a test version built again under its name: the tag moves to this commit and the files are
+        # put in place of the earlier ones, so the links given out stay good
+        gh("api", "-X", "PATCH", "repos/%s/git/refs/tags/%s" % (REPO, tag), "-f", "sha=" + SHA, "-F", "force=true",
+           check=False)
+        print(f"{tag}: a test version built again, its files replaced")
+    elif have and have != SHA:
         print(f"{tag} is out already (another commit): no version number went up, nothing to release")
         tidy(tag)
         return

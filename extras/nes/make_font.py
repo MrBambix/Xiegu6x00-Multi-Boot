@@ -17,7 +17,7 @@ FACES = [   # name, file, size px, the characters (None: all)
     ("body", "Inter-Regular", 19, None),
     ("list", "Inter-Medium", 23, None),
     ("title", "Inter-SemiBold", 28, None),
-    ("huge", "Inter-Bold", 60, list("0123456789 NES-")),
+    ("huge", "Inter-Bold", 60, list("0123456789 NES-#ABCDEFGHIJKLMNOPQRSTUVWXYZ")),
 ]
 
 
