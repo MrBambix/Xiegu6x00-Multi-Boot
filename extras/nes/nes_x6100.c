@@ -3215,7 +3215,8 @@ static bool donor_chroot(void)
 	chroot_ready = true;
 	restore_kept_early();
 	if (access("/nes/net/wifi.conf", R_OK) == 0)    /* a network chosen before: on again */
-		run_chroot("export PATH=/usr/sbin:/usr/bin:/sbin:/bin; exec /usr/bin/python3 /tmp/nes_net.py up >>/tmp/net.log 2>&1\n", "nes-net-up.sh", NULL, NULL);
+		run_chroot("export PATH=/usr/sbin:/usr/bin:/sbin:/bin; /usr/bin/python3 /tmp/nes_net.py up >>/tmp/net.log 2>&1;"
+		           " exec /usr/bin/python3 /tmp/nes_net.py web >>/tmp/net.log 2>&1\n", "nes-net-up.sh", NULL, NULL);
 	return true;
 }
 
@@ -5012,6 +5013,7 @@ static void wifi_scan(void)
 	net_wait("net-state", "WiFi", names[c], 100, l, sizeof l, "busy");
 	logmsg("wifi: %s", l);
 	if (!strncmp(l, "ok\t", 3) && net_on()) {
+		net_run("web", NULL);
 		char a[96];
 		snprintf(a, sizeof a, "http://%s/", net_ip);
 		const char *m[] = {T("Połączono z siecią", "Connected to"), net_ssid, "",
@@ -5182,6 +5184,7 @@ static void wifi_menu(void)
 		switch (act[c]) {
 		case 0: wifi_scan(); break;
 		case 1: {
+			net_run("web", NULL);                 /* serving already, or now */
 			char a[96];
 			snprintf(a, sizeof a, "http://%s/", net_ip);
 			const char *m[] = {T("Otwórz w przeglądarce (ta sama sieć):", "Open in a browser (the same network):"), a, "",

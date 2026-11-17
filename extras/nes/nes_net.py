@@ -217,13 +217,6 @@ def up():
         say("net-state", "fail\tno address (DHCP)")
         return
     say("net-state", "ok\t%s\t%s" % (ssid, ip))
-    if not os.path.exists("/tmp/net-web.pid") and os.fork() == 0:   # the web page, while the network lasts
-        with open("/tmp/net-web.pid", "w") as f:
-            f.write(str(os.getpid()))
-        os.closerange(3, 1024)          # the lock of one-at-a-time not kept by the page
-        os.setsid()
-        web()
-        os._exit(0)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -358,9 +351,13 @@ class Handler(BaseHTTPRequestHandler):
 
 def web():
     try:
-        ThreadingHTTPServer(("0.0.0.0", 80), Handler).serve_forever()
-    except Exception as e:  # noqa: BLE001
-        say("net-web", "fail\t%s" % e)
+        srv = ThreadingHTTPServer(("0.0.0.0", 80), Handler)
+    except OSError as e:
+        log("web: not started:", e)       # one already serving (address in use): fine
+        return
+    log("web: serving the games on port 80")
+    say("net-web", "ok")
+    srv.serve_forever()
 
 
 # ---------------------------------------------------------------------------------------------
