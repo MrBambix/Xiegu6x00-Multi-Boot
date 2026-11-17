@@ -56,6 +56,7 @@
 
 #include "libretro.h"
 #include "font_inter.h"
+#include "qrcodegen.h"                /* nayuki QR-Code-generator (MIT): the web page's address */
 /* Game pictures (PNG, JPEG, BMP) beside the games: stb_image by Sean Barrett (public domain / MIT) */
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -4792,6 +4793,8 @@ static void games_tab(void)
 /* ------------------------------------------------------------------------------------------ */
 static const char net_sh[] = "export PATH=/usr/sbin:/usr/bin:/sbin:/bin; exec /usr/bin/python3 /tmp/nes_net.py \"$1\" \"$2\" >>/tmp/net.log 2>&1\n";
 
+static void web_screen(void);
+
 static void net_run(const char *cmd, const char *arg)
 {
 	if (!chroot_ready) return;
@@ -5016,9 +5019,8 @@ static void wifi_scan(void)
 		net_run("web", NULL);
 		char a[96];
 		snprintf(a, sizeof a, "http://%s/", net_ip);
-		const char *m[] = {T("Połączono z siecią", "Connected to"), net_ssid, "",
-		                   T("Gry wgrasz przez przeglądarkę:", "Add games in a web browser:"), a};
-		message(T("Gotowe", "Done"), m, 5, 0);
+		(void)a;
+		web_screen();
 	} else {
 		const char *why = strchr(l, '\t') ? strchr(l, '\t') + 1 : T("brak odpowiedzi", "no answer");
 		const char *m[] = {T("Nie udało się połączyć:", "Could not connect:"), why};
@@ -5157,8 +5159,59 @@ static void ota_menu(void)
 static void copy_file_early(const char *from, const char *to) { copy_file(from, to); }
 static void restore_kept_early(void) { restore_kept(); }
 
+/* The games' page: its address as a QR code to scan, and in letters */
+static void web_screen(void)
+{
+	char url[64];
+	snprintf(url, sizeof url, "http://%s/", net_ip);
+	uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(6)], tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
+	bool ok = qrcodegen_encodeText(url, tmp, qr, qrcodegen_Ecc_MEDIUM, 1, 6, qrcodegen_Mask_AUTO, true);
+	fill_bg(0, 0, LAND_W, LAND_H);
+	fill(0, 0, LAND_W, 62, C_BAR);
+	fill(0, 62, LAND_W, 1, C_LINE);
+	draw_text(26, 13, F_TITLE, C_TEXT, T("Strona z grami", "The games' page"));
+	if (ok) {
+		int n = qrcodegen_getSize(qr), cell = 300 / (n + 8), side = cell * (n + 8), x0 = 40, y0 = 90;
+		rrect(x0, y0, side, side, 12, 0xffffff);
+		for (int y = 0; y < n; y++)
+			for (int x = 0; x < n; x++)
+				if (qrcodegen_getModule(qr, x, y))
+					fill(x0 + (x + 4) * cell, y0 + (y + 4) * cell, cell, cell, 0x000000);
+	}
+	int tx = 370;
+	draw_text(tx, 100, F_BODY, C_DIM, T("Zeskanuj telefonem albo wpisz:", "Scan it with a phone, or type:"));
+	draw_text_fit(tx, 130, F_TITLE, C_ACCENT, url, LAND_W - tx - 20, false);
+	draw_wrapped(tx, 190, F_BODY, C_TEXT, T("Telefon albo komputer w tej samej sieci WiFi co radio. Wpisz adres razem z http:// "
+	                                        "(bez tego przeglądarka próbuje https i odmawia).",
+	                                        "A phone or computer on the radio's WiFi. Type the address with http:// "
+	                                        "(without it a browser tries https and is refused)."), LAND_W - tx - 24, 26, 6);
+	draw_wrapped(tx, 350, F_SMALL, C_DIM, T("Dodajesz tam gry do listy i wgrywasz je przyciskiem Wgraj do emulatora.",
+	                                        "Add games to the list there, then Upload to the emulator."), LAND_W - tx - 24, 22, 3);
+	fill(0, LAND_H - 42, LAND_W, 42, C_BAR);
+	key_chips(24, LAND_H - 32, LAND_W - 20, T("MFK / F1 / A / B: wróć", "MFK / F1 / A / B: back"));
+	present(0, 0, LAND_W, LAND_H);
+	if (test_mode && !keys_scripted())
+		return;
+	input_settle();
+	menu_depth++;
+	for (;;) {
+		poll_input();
+		enum nav v = nav_pop();
+		if (v == N_OK || v == N_BACK || v == N_MENU)
+			break;
+		idle(10);
+	}
+	menu_depth--;
+	input_settle();
+}
+
 static void wifi_menu(void)
 {
+	if (getenv("NES_TEST_QR")) {
+		snprintf(net_ip, sizeof net_ip, "192.168.0.112");
+		web_screen();
+		return;
+	}
 	if (getenv("NES_TEST_OSK")) {
 		char pw[64] = "";
 		osk("Hasło: test", pw, sizeof pw);
@@ -5183,15 +5236,10 @@ static void wifi_menu(void)
 		sel = c;
 		switch (act[c]) {
 		case 0: wifi_scan(); break;
-		case 1: {
+		case 1:
 			net_run("web", NULL);                 /* serving already, or now */
-			char a[96];
-			snprintf(a, sizeof a, "http://%s/", net_ip);
-			const char *m[] = {T("Otwórz w przeglądarce (ta sama sieć):", "Open in a browser (the same network):"), a, "",
-			                   T("Wgrywasz i usuwasz tam gry z folderu NES.", "Add and remove the NES folder's games there.")};
-			message(T("Strona z grami", "The games' page"), m, 4, 0);
+			web_screen();
 			break;
-		}
 		case 2: ota_menu(); break;
 		case 3: net_run("down", NULL); idle(1500); break;
 		}
