@@ -4952,7 +4952,7 @@ static void wifi_scan(void)
 	char l[200];
 	net_forget("net-scan");
 	net_run("scan", NULL);
-	if (!net_wait("net-scan", "WiFi", T("Szukam sieci…", "Looking for networks…"), 30, l, sizeof l, NULL)) {
+	if (!net_wait("net-scan", "WiFi", T("Szukam sieci…", "Looking for networks…"), 45, l, sizeof l, NULL)) {
 		const char *m[] = {T("Nie znaleziono sieci.", "No network found."), T("Czy WiFi radia działa?", "Is the radio's WiFi on?")};
 		message("WiFi", m, 2, 0);
 		return;
@@ -4998,7 +4998,7 @@ static void wifi_scan(void)
 	memset(pw, 0, sizeof pw);
 	net_forget("net-state");
 	net_run("up", NULL);
-	net_wait("net-state", "WiFi", names[c], 60, l, sizeof l, "busy");
+	net_wait("net-state", "WiFi", names[c], 100, l, sizeof l, "busy");
 	logmsg("wifi: %s", l);
 	if (!strncmp(l, "ok\t", 3) && net_on()) {
 		char a[96];
@@ -5217,8 +5217,8 @@ static void draw_tile(const struct tile *t, bool on)
 		rrect(t->x - 4, t->y - 4, t->w + 8, t->h + 8, 14, 0x1f7a4d);       /* the chosen one: a green ring */
 	rrect(t->x, t->y, t->w, t->h, 10, on ? 0xa8f5cd : t->border);
 	int ix = t->x + 4, iy = t->y + 4, iw = t->w - 8, ih = t->h - 8, ah = ih - t->band_h;
-	int art_w = t->big || t->w > 300 ? 370 : 178, shift = 0;
-	if (art_w > iw) {                                /* the drawing's own middle in the tile's */
+	int art_w = t->big || t->w > 300 ? 370 : 105, shift = 0;
+	if (art_w > iw && !(t->big || t->w > 300)) {     /* the drawing's own middle in the tile's */
 		int lo = art_w, hi = 0;
 		for (int i = 0; i < t->n_art; i++) {
 			const struct tile_shape *q = &t->art[i];
@@ -5330,11 +5330,11 @@ static int tiles_menu(int sel)
 				                0xffe3a3, T("Sterowanie", "Controls"),
 				                T("Klawisze radia, klawiatura, przyciski pada", "The radio's keys, the keyboard, pad buttons"),
 				                gx + bw + gap, gy, bw, sh, 62, false},
-				[X_PAIR] = {tile_bluetooth, (int)(sizeof tile_bluetooth / sizeof *tile_bluetooth), 100, 0x2c5aa8, 0x10254c, C_TEXT,
+				[X_PAIR] = {tile_bt_s, (int)(sizeof tile_bt_s / sizeof *tile_bt_s), 100, 0x2c5aa8, 0x10254c, C_TEXT,
 				            0xbcd6ff, "Bluetooth", bt_sub, gx + bw + gap, gy + sh + gap, sw, sh, 62, false},
-				[X_WIFI] = {tile_wifi, (int)(sizeof tile_wifi / sizeof *tile_wifi), 100, 0x2a9d8f, 0x0b3532, C_TEXT, 0xbff0e8,
+				[X_WIFI] = {tile_wifi_s, (int)(sizeof tile_wifi_s / sizeof *tile_wifi_s), 100, 0x2a9d8f, 0x0b3532, C_TEXT, 0xbff0e8,
 				            "WiFi", wifi_sub, gx + bw + gap + sw + gap, gy + sh + gap, sw, sh, 62, false},
-				[X_OFF] = {tile_off, (int)(sizeof tile_off / sizeof *tile_off), 100, 0x8a2f3a, 0x34101a, C_TEXT, 0xffc4c7,
+				[X_OFF] = {tile_off_s, (int)(sizeof tile_off_s / sizeof *tile_off_s), 100, 0x8a2f3a, 0x34101a, C_TEXT, 0xffc4c7,
 				           T("Wyłącz", "Off"), T("Radio", "Radio"),
 				           gx + bw + gap + 2 * (sw + gap), gy + sh + gap, bw - 2 * (sw + gap), sh, 62, false},
 			};

@@ -105,7 +105,7 @@ def scan():
     log("scan: link up", r.returncode, r.stderr.strip()[:120], "| ifaces:", " ".join(os.listdir("/sys/class/net")))
     nets = {}
     for _ in range(2):
-        rr = run("iw", "dev", IFACE, "scan", timeout=20)
+        rr = run("iw", "dev", IFACE, "scan", timeout=12)
         out = rr.stdout
         log("scan: iw", rr.returncode, rr.stderr.strip()[:160], "lines", len(out.splitlines()))
         ssid, sig, sec = None, -100.0, False
@@ -208,7 +208,8 @@ def up():
         say("net-state", "fail\t%s" % ("wrong password?" if state in ("4WAY_HANDSHAKE", "DISCONNECTED", "SCANNING") else
                                          state or "no answer"))
         return
-    run("udhcpc", "-i", IFACE, "-n", "-q", "-t", "8", "-T", "2", timeout=40)
+    r = run("udhcpc", "-i", IFACE, "-n", "-q", "-t", "6", "-T", "3", timeout=30)
+    log("up: udhcpc", r.returncode, (r.stderr or r.stdout).strip()[-200:])
     ip = ip_of()
     log("up: address", ip or "none")
     if not ip:
@@ -218,6 +219,7 @@ def up():
     if not os.path.exists("/tmp/net-web.pid") and os.fork() == 0:   # the web page, while the network lasts
         with open("/tmp/net-web.pid", "w") as f:
             f.write(str(os.getpid()))
+        os.closerange(3, 1024)          # the lock of one-at-a-time not kept by the page
         os.setsid()
         web()
         os._exit(0)
@@ -442,7 +444,25 @@ def ota_flash(dev):
         say("ota-state", "fail\t%s" % str(e)[:100])
 
 
-if __name__ == "__main__":
+def main():
+    import fcntl
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    {"scan": scan, "up": up, "down": down, "web": web, "ota-check": ota_check, "ota-get": ota_get}.get(
-        cmd, lambda: None)() if cmd != "ota-flash" else ota_flash(sys.argv[2])
+    if cmd in ("scan", "up", "down"):
+        lock = open("/tmp/net.lock", "w")
+        fcntl.flock(lock, fcntl.LOCK_EX)         # one at a time: a second waits for the first
+    try:
+        if cmd == "ota-flash":
+            ota_flash(sys.argv[2])
+        else:
+            {"scan": scan, "up": up, "down": down, "web": web, "ota-check": ota_check, "ota-get": ota_get}.get(
+                cmd, lambda: None)()
+    except Exception as e:  # noqa: BLE001
+        log(cmd, "failed:", repr(e))
+        if cmd == "up":
+            say("net-state", "fail\t%s" % str(e)[:80])
+        elif cmd == "scan":
+            say("net-scan", "")
+
+
+if __name__ == "__main__":
+    main()
