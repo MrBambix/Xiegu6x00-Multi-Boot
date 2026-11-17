@@ -4990,6 +4990,7 @@ static void wifi_scan(void)
 		snprintf(t, sizeof t, T("Hasło: %s", "Password: %s"), names[c]);
 		if (!osk(t, pw, sizeof pw)) return;
 	}
+	logmsg("wifi: connecting to %s (%s)", names[c], secure[c] ? "with a password" : "open");
 	FILE *q = fopen("/bt/tmp/net-req.txt", "w");
 	if (!q) return;
 	fprintf(q, "%s\n%s\n", names[c], pw);
@@ -4998,6 +4999,7 @@ static void wifi_scan(void)
 	net_forget("net-state");
 	net_run("up", NULL);
 	net_wait("net-state", "WiFi", names[c], 60, l, sizeof l, "busy");
+	logmsg("wifi: %s", l);
 	if (!strncmp(l, "ok\t", 3) && net_on()) {
 		char a[96];
 		snprintf(a, sizeof a, "http://%s/", net_ip);

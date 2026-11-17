@@ -132,6 +132,7 @@ def scan():
     if not nets:
         nets = scan_wpa()
     log("scan: found", len(nets))
+    log("scan: networks", ", ".join("%s (%d dBm%s)" % (n, s, ", secured" if sec else "") for n, (s, sec) in nets.items()))
     lines = ["%d\t%d\t%s" % (s, 1 if sec else 0, n) for n, (s, sec) in sorted(nets.items(), key=lambda x: -x[1][0])]
     say("net-scan", "\n".join(lines) if lines else "")
 
@@ -182,12 +183,14 @@ def up():
     m = re.search(r'ssid="([^"]*)"', open(CONF).read())
     if m:
         ssid = m.group(1)
+    log("up: network", ssid)
     say("net-state", "busy\t%s" % ssid)
     ensure_iface()
     down()
     run("ip", "link", "set", IFACE, "up")
     os.makedirs("/var/run/wpa_supplicant", exist_ok=True)
     r = run("wpa_supplicant", "-B", "-i", IFACE, "-c", CONF, "-D", "nl80211,wext")
+    log("up: wpa_supplicant", r.returncode, (r.stderr or r.stdout).strip()[:200])
     if r.returncode:
         say("net-state", "fail\twpa_supplicant: %s" % (r.stderr or r.stdout).strip()[:80])
         return
@@ -199,6 +202,7 @@ def up():
         if state == "COMPLETED":
             break
         time.sleep(0.5)
+    log("up: wpa_state", state)
     if state != "COMPLETED":
         down()
         say("net-state", "fail\t%s" % ("wrong password?" if state in ("4WAY_HANDSHAKE", "DISCONNECTED", "SCANNING") else
@@ -206,6 +210,7 @@ def up():
         return
     run("udhcpc", "-i", IFACE, "-n", "-q", "-t", "8", "-T", "2", timeout=40)
     ip = ip_of()
+    log("up: address", ip or "none")
     if not ip:
         say("net-state", "fail\tno address (DHCP)")
         return
