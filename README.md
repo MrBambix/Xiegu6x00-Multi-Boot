@@ -16,7 +16,9 @@ Najnowsza wersja jest w zakładce **[Releases](../../releases/latest)**:
 |---|---|
 | `Xiegu-Multi-Patcher-Windows.zip` | Windows 10/11: rozpakuj (prawy przycisk → Wyodrębnij wszystkie) i uruchom `Xiegu Multi Patcher.exe` z folderu |
 | `Xiegu-Multi-Patcher-macOS.zip` | macOS: rozpakuj, przenieś do Programów; za pierwszym razem macOS ją zablokuje: **Ustawienia systemowe → Prywatność i ochrona → Otwórz mimo to** (albo w Terminalu `xattr -dr com.apple.quarantine "/Applications/Xiegu Multi Patcher.app"`) |
-| `Xiegu-Multi-Patcher-Linux` | Linux x86-64: `chmod +x Xiegu-Multi-Patcher-Linux`; do zapisu karty potrzebny `pkexec` |
+| `Xiegu-Multi-Patcher-Linux.zip` | Linux x86-64: rozpakuj i uruchom `Xiegu Multi Patcher` z folderu; do zapisu karty potrzebny `pkexec` |
+
+**Instrukcja krok po kroku:** [INSTRUKCJA.html](INSTRUKCJA.html) (polski) i [INSTRUCTIONS.html](INSTRUCTIONS.html) (English). Oba pliki są też w każdej paczce z aplikacją; otwierasz je w przeglądarce.
 
 Każda wersja aplikacji ma swój numer (Windows, macOS i Linux osobno, w tytule okna aplikacji i w nazwie wydania): poprawka tylko pod Windows podnosi tylko numer Windows.
 
@@ -242,6 +244,8 @@ the radio's internal memory (eMMC); the app changes nothing there.
 
 The app (Windows, macOS, Linux; from **[Releases](../../releases/latest)**, nothing to install;
 on Windows unpack `Xiegu-Multi-Patcher-Windows.zip` and run `Xiegu Multi Patcher.exe` from the folder)
+
+**Step-by-step guide:** [INSTRUCTIONS.html](INSTRUCTIONS.html) (English) and [INSTRUKCJA.html](INSTRUKCJA.html) (Polish), also in every app package
 speaks English and Polish: pick the language at the top right of its window.
 
 1. **+ From the internet…** fetches a system's image straight from its authors' GitHub releases

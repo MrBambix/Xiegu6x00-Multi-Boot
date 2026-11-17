@@ -160,12 +160,18 @@ jobs:
       - name: Pack
         shell: bash
         run: |
+          # each package: the app and the guide in both languages next to it
           mkdir out
           case "$RUNNER_OS" in
-            Windows) (cd dist && 7z a -tzip -mx=7 ../out/Xiegu-Multi-Patcher-Windows.zip "Xiegu Multi Patcher" >/dev/null) ;;
-            macOS)   (cd dist && ditto -c -k --keepParent "Xiegu Multi Patcher.app" ../out/Xiegu-Multi-Patcher-macOS.zip) ;;
-            Linux)   cp "dist/Xiegu Multi Patcher" out/Xiegu-Multi-Patcher-Linux && chmod +x out/Xiegu-Multi-Patcher-Linux ;;
+            Windows) cp INSTRUKCJA.html INSTRUCTIONS.html "dist/Xiegu Multi Patcher/"
+                     (cd dist && 7z a -tzip -mx=7 ../out/Xiegu-Multi-Patcher-Windows.zip "Xiegu Multi Patcher" >/dev/null) ;;
+            macOS)   mkdir "pkg" && mv "dist/Xiegu Multi Patcher.app" pkg/ && cp INSTRUKCJA.html INSTRUCTIONS.html pkg/
+                     ditto -c -k pkg out/Xiegu-Multi-Patcher-macOS.zip ;;
+            Linux)   mkdir -p "pkg/Xiegu Multi Patcher" && cp "dist/Xiegu Multi Patcher" INSTRUKCJA.html INSTRUCTIONS.html "pkg/Xiegu Multi Patcher/"
+                     chmod +x "pkg/Xiegu Multi Patcher/Xiegu Multi Patcher"
+                     (cd pkg && zip -q -r -X ../out/Xiegu-Multi-Patcher-Linux.zip "Xiegu Multi Patcher") ;;
           esac
+          if [ "$RUNNER_OS" = Windows ]; then 7z l out/*.zip; else unzip -l out/*.zip; fi | grep -cE "INSTRUKCJA|INSTRUCTIONS" | grep -qx 2
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.out }}

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xiegu Multi Patcher – instrukcja</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1d232b;--muted:#5b6573;--line:#dfe3e8;--accent:#1f6feb;--ok:#1a7f4b;--warn:#b35900;--key:#eef1f5}
+@media (prefers-color-scheme:dark){:root{--bg:#14181d;--card:#1c2128;--text:#e6e9ed;--muted:#9aa4b1;--line:#2d343d;--accent:#58a6ff;--ok:#3fb950;--warn:#e3a14a;--key:#262d36}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:820px;margin:0 auto;padding:24px 16px 60px}
+h1{font-size:28px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 20px}
+nav{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 18px;margin-bottom:22px}
+nav ol{margin:6px 0;padding-left:22px}
+nav a{color:var(--accent);text-decoration:none}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 20px 14px;margin-bottom:18px}
+h2{font-size:21px;margin:16px 0 8px}
+h3{font-size:17px;margin:14px 0 6px}
+ol,ul{padding-left:24px}
+li{margin:4px 0}
+b.btn{background:var(--key);border:1px solid var(--line);border-radius:5px;padding:0 6px;font-weight:600;white-space:nowrap}
+kbd{background:var(--key);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font:600 14px ui-monospace,Consolas,monospace;white-space:nowrap}
+.tip,.warn{border-left:4px solid var(--ok);padding:6px 12px;margin:10px 0;background:color-mix(in srgb,var(--ok) 8%,transparent);border-radius:0 6px 6px 0}
+.warn{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,transparent)}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:15px}
+td,th{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+th{background:var(--key)}
+code{font:14px ui-monospace,Consolas,monospace;background:var(--key);padding:0 4px;border-radius:4px}
+.lang{text-align:right;margin:0 0 6px;font-size:14px}.lang a{color:var(--accent)}
+@media print{body{background:#fff}section,nav{break-inside:avoid;border-color:#bbb}}
+</style>
+</head>
+<body>
+<main>
+<p class="lang"><b>Polski</b> · <a href="INSTRUCTIONS.html">English</a></p>
+<h1>Xiegu Multi Patcher – instrukcja krok po kroku</h1>
+<p class="sub">Kilka systemów, Doom i emulator NES na jednej karcie SD do Xiegu X6100.</p>
+
+<nav><b>Spis treści</b>
+<ol>
+<li><a href="#potrzebne">Co jest potrzebne</a></li>
+<li><a href="#apka">Uruchomienie aplikacji</a></li>
+<li><a href="#karta">Pierwsza karta: systemy radia</a></li>
+<li><a href="#start">Start radia z karty</a></li>
+<li><a href="#doom">Doom</a></li>
+<li><a href="#nes">Emulator NES i gry</a></li>
+<li><a href="#pady">Pady, klawiatura i mysz</a></li>
+<li><a href="#wifi">WiFi: gry przez przeglądarkę i aktualizacja</a></li>
+<li><a href="#problemy">Gdy coś nie działa</a></li>
+</ol></nav>
+
+<section id="potrzebne">
+<h2>1. Co jest potrzebne</h2>
+<ul>
+<li>Karta microSD, najlepiej <b>16 GB lub większa</b>, i czytnik kart w komputerze.</li>
+<li>Komputer z Windows 10/11, macOS albo Linuksem, podłączony do internetu.</li>
+<li>Radio Xiegu X6100.</li>
+</ul>
+<div class="warn"><b>Uwaga:</b> zapis <b>kasuje całą kartę</b>. Jeśli masz na niej coś ważnego, najpierw skopiuj to na komputer.
+Oryginalnego systemu w pamięci radia aplikacja nie zmienia.</div>
+</section>
+
+<section id="apka">
+<h2>2. Uruchomienie aplikacji</h2>
+<p>Plik do pobrania jest na stronie wydania (Releases), na samym dole w części <b>Assets</b>.</p>
+<h3>Windows</h3>
+<ol>
+<li>Pobierz <code>Xiegu-Multi-Patcher-Windows.zip</code>.</li>
+<li>Kliknij plik <b>prawym</b> przyciskiem → <b class="btn">Wyodrębnij wszystkie…</b> → <b class="btn">Wyodrębnij</b>.
+  <br><i>Nie uruchamiaj programu prosto z pliku .zip, bo nie zadziała.</i></li>
+<li>W rozpakowanym folderze kliknij dwa razy <code>Xiegu Multi Patcher.exe</code>.</li>
+<li>Jeśli pojawi się niebieskie okno „System Windows ochronił komputer”: kliknij <b class="btn">Więcej informacji</b> → <b class="btn">Uruchom mimo to</b>.
+  Aplikacja nie ma płatnego podpisu, dlatego Windows jej „nie zna”.</li>
+</ol>
+<h3>macOS</h3>
+<ol>
+<li>Pobierz <code>Xiegu-Multi-Patcher-macOS.zip</code> i kliknij go dwa razy, żeby go rozpakować.</li>
+<li>Przeciągnij <b>Xiegu Multi Patcher</b> do folderu <b>Programy</b> i uruchom.</li>
+<li>Jeśli macOS ją zablokuje: <b class="btn">Ustawienia systemowe</b> → <b class="btn">Prywatność i ochrona</b> → na dole <b class="btn">Otwórz mimo to</b>.</li>
+</ol>
+<h3>Linux</h3>
+<ol>
+<li>Pobierz <code>Xiegu-Multi-Patcher-Linux.zip</code> i rozpakuj go.</li>
+<li>W folderze <b>Xiegu Multi Patcher</b> uruchom plik <code>Xiegu Multi Patcher</code> (dwuklik albo w terminalu <code>./"Xiegu Multi Patcher"</code>).
+  Jeśli nie chce się uruchomić: <code>chmod +x "Xiegu Multi Patcher"</code>.</li>
+</ol>
+<p>Język zmienisz w prawym górnym rogu okna (Polski / English).</p>
+</section>
+
+<section id="karta">
+<h2>3. Pierwsza karta: systemy radia</h2>
+<ol>
+<li>Kliknij <b class="btn">+ Z internetu…</b>.</li>
+<li>Wybierz <b>OpenX6X00</b> (najnowsza wersja jest już zaznaczona) i kliknij <b class="btn">Dodaj</b>.
+  Aplikacja sama pobierze system; postęp widać na dole okna.</li>
+<li>Jeśli chcesz, dodaj tak samo inne systemy (OpenX6100, CX8ANM, 1KO125, IU1WXY, R1CBU). Razem do <b>5 pozycji</b>.</li>
+<li>Jeśli chcesz mieć w menu też <b>oryginalny system Xiegu</b> z pamięci radia, kliknij <b class="btn">+ Xiegu z eMMC</b>.</li>
+<li>W oknie widzisz menu dokładnie takie, jakie pokaże radio. Kliknij kafelek, żeby go zaznaczyć, i wtedy:
+  <ul>
+  <li>strzałki <b class="btn">←</b> <b class="btn">→</b> zmieniają kolejność,</li>
+  <li><b class="btn">★ Domyślny</b>: ten system wystartuje sam, jeśli nic nie wciśniesz,</li>
+  <li><b class="btn">Zmień nazwę</b> i <b class="btn">Logo…</b>: własny napis i obrazek (nie trzeba).</li>
+  </ul></li>
+<li>Włóż kartę do czytnika. Wybierz ją na liście <b>Karta SD</b> (jej nie widać? kliknij <b class="btn">Odśwież</b>).
+  <b>Sprawdź rozmiar karty</b>, żeby nie pomylić jej z innym dyskiem.</li>
+<li>Kliknij <b class="btn">Wgraj na kartę</b>, potwierdź i podaj hasło do komputera, jeśli zapyta.</li>
+<li>Poczekaj na <b>✓ Gotowe</b>. Po zapisie aplikacja jeszcze sprawdza kartę; to trwa kilka minut, nie przerywaj.</li>
+</ol>
+<div class="tip"><b>Ważne dla Dooma i emulatora:</b> zostaw <b>OpenX6X00 na pierwszym miejscu</b> wśród systemów.
+Doom i emulator korzystają z jego jądra, Bluetooth i WiFi.</div>
+<div class="tip"><b>Masz już kartę z ustawieniami radia?</b> Włóż ją przed zapisem i zostaw zaznaczone
+<b>Przenieś ustawienia ze starej karty</b>. Aplikacja skopiuje ustawienia, logi i parowania, a po zapisie wgra je z powrotem do tych samych systemów.</div>
+</section>
+
+<section id="start">
+<h2>4. Start radia z karty</h2>
+<ol>
+<li>Włóż kartę do radia (przy wyłączonym radiu) i włącz radio.</li>
+<li>Pojawi się menu z kafelkami. System wybierasz klawiszem <kbd>F1</kbd>–<kbd>F5</kbd> pod ekranem
+  (F1 to pierwszy kafelek od lewej).</li>
+<li>Jeśli nic nie wciśniesz, po kilku sekundach wystartuje system domyślny (★).</li>
+<li><kbd>POWER</kbd> w menu wyłącza radio.</li>
+</ol>
+<p>Za pierwszym razem system może startować dłużej niż zwykle, bo przygotowuje sobie kartę.</p>
+</section>
+
+<section id="doom">
+<h2>5. Doom</h2>
+<h3>Dodanie</h3>
+<ol>
+<li>Najpierw dodaj system (np. OpenX6X00), tak jak w punkcie 3.</li>
+<li>W części <b>Extras</b> kliknij <b class="btn">+ Doom</b>. Kafelek Dooma pojawi się w menu.</li>
+<li><b class="btn">Wgraj na kartę</b>.</li>
+</ol>
+<h3>Sterowanie na radiu</h3>
+<table>
+<tr><th>Radio</th><th>W grze</th><th>Radio</th><th>W grze</th></tr>
+<tr><td>gałka VFO</td><td>obrót</td><td><kbd>F1</kbd> albo PTT</td><td>strzał</td></tr>
+<tr><td>gałka VOL / BAND ▲▼</td><td>do przodu / do tyłu</td><td><kbd>F2</kbd></td><td>drzwi, przełączniki</td></tr>
+<tr><td>gałka MFK</td><td>zmiana broni</td><td><kbd>F4</kbd> / <kbd>F5</kbd></td><td>krok w bok</td></tr>
+<tr><td><kbd>GEN</kbd></td><td>menu gry</td><td><kbd>F3</kbd></td><td>Enter</td></tr>
+<tr><td><kbd>APP</kbd></td><td>mapa</td><td><kbd>AM</kbd></td><td>bieg</td></tr>
+</table>
+<p>Mysz i klawiatura: patrz punkt 7. Głośność zmienisz w pliku <code>doom.txt</code> na karcie (partycja <b>BOOT</b>).</p>
+</section>
+
+<section id="nes">
+<h2>6. Emulator NES i gry</h2>
+<h3>Dodanie</h3>
+<ol>
+<li>Najpierw dodaj system (najlepiej OpenX6X00), tak jak w punkcie 3.</li>
+<li>W <b>Extras</b> kliknij <b class="btn">+ Emulator NES</b>.</li>
+<li>Kliknij <b class="btn">Gry NES…</b>. Dokładaj gry przyciskiem <b class="btn">+ Gry…</b> (pojedyncze pliki)
+  albo <b class="btn">+ Folder…</b> (cały folder), potem <b class="btn">Gotowe</b>.
+  Pliki: <code>.nes</code>, <code>.fds</code>, <code>.unf</code>, <code>.nsf</code>, także w <code>.zip</code>.</li>
+<li><b class="btn">Wgraj na kartę</b>.</li>
+</ol>
+<div class="warn">Aplikacja <b>nie zawiera żadnych gier</b>. Wgrywasz własne kopie.</div>
+<h3>Dokładanie gier później</h3>
+<ul>
+<li><b>Z komputera:</b> włóż kartę do czytnika. Pokaże się dysk <b>BOOT</b>; skopiuj gry do folderu <code>NES</code>.</li>
+<li><b>Przez WiFi:</b> patrz punkt 8 (bez wyjmowania karty).</li>
+<li><b>Okładki:</b> obrazek <code>.png</code> albo <code>.jpg</code> o tej samej nazwie co gra pokaże się przy liście gier.</li>
+</ul>
+<h3>Menu emulatora</h3>
+<p>Kafelki: <b>Lista gier</b>, <b>Sterowanie</b>, <b>Bluetooth</b>, <b>WiFi</b>, <b>Wyłącz</b>.
+Po menu chodzisz gałką <b>MFK</b> albo krzyżakiem. <kbd>F1</kbd> lub wciśnięcie MFK zatwierdza, <kbd>F2</kbd> wraca.</p>
+<h3>Sterowanie na radiu (gracz 1)</h3>
+<table>
+<tr><th>Radio</th><th>Pad NES</th><th>Radio</th><th>Pad NES</th></tr>
+<tr><td>BAND ▲▼, DFN, DFL</td><td>krzyżak</td><td><kbd>F3</kbd></td><td>Select</td></tr>
+<tr><td><kbd>F1</kbd> albo PTT</td><td>A</td><td><kbd>F4</kbd></td><td>Start</td></tr>
+<tr><td><kbd>F2</kbd></td><td>B</td><td><kbd>F5</kbd></td><td>A turbo</td></tr>
+<tr><td>gałka VFO</td><td>lewo / prawo</td><td>gałka VOL</td><td>głośność</td></tr>
+</table>
+<p><b>Menu w trakcie gry</b> (graj dalej, od nowa, obraz, zapis/wczytanie stanu, wyjście, wyłączenie):
+wciśnij <b>MFK</b> albo <kbd>GEN</kbd>; na padzie przycisk <b>Home</b> (logo) albo Select+Start razem.
+Po wyjściu z gry emulator pamięta miejsce: „Kontynuuj od miejsca wyjścia”.</p>
+</section>
+
+<section id="pady">
+<h2>7. Pady, klawiatura i mysz</h2>
+<h3>Przez kabel (USB)</h3>
+<p>Podłącz do gniazda <b>HOST</b> radia. Dwa urządzenia naraz: przez mały hub USB. Nic nie trzeba włączać; działa od razu, także w trakcie gry.
+Przewodowe pady Xbox 360 nie działają (radio nie ma do nich sterownika).</p>
+
+<h3>Pad Bluetooth w emulatorze NES (Xbox, PS4, 8BitDo, Switch)</h3>
+<ol>
+<li>W menu emulatora wybierz kafelek <b>Bluetooth</b> → <b>Szukaj i paruj nowe</b>.</li>
+<li>Włącz w padzie <b>tryb parowania</b>:
+  <ul>
+  <li><b>Xbox:</b> włącz pad, potem przytrzymaj mały przycisk parowania z przodu, aż logo zacznie szybko migać.</li>
+  <li><b>PS4:</b> przytrzymaj razem <b>Share</b> i <b>PS</b>, aż pasek świetlny zacznie migać.</li>
+  <li><b>8BitDo:</b> tryb D-input albo Switch, potem przytrzymaj przycisk parowania ok. 3 s.</li>
+  </ul></li>
+<li>Pad pojawi się na liście. Wybierz go (MFK albo <kbd>F1</kbd>) i poczekaj kilka sekund, aż się połączy. Przez ten czas trzymaj pad w trybie parowania.</li>
+<li>Gotowe. Następnym razem wystarczy włączyć pad; połączy się sam.</li>
+</ol>
+<p>Pierwszy pad to gracz 1, drugi to gracz 2. Inny układ przycisków: <b>Sterowanie</b> → <b>Przyciski pada: własny układ</b>.
+Pada wyłączysz, przytrzymując <b>Home</b> ok. 1 s (pojawi się menu: wyłącz pada / wyłącz radio). Przy wyłączaniu emulatora pady wyłączają się same.</p>
+
+<h3>Klawiatura i mysz Bluetooth w emulatorze NES</h3>
+<p>Tak samo jak pad: <b>Bluetooth</b> → <b>Szukaj i paruj nowe</b>. Jeśli na ekranie pojawi się kod, wpisz go na klawiaturze i wciśnij Enter.</p>
+
+<h3>Klawiatura i mysz Bluetooth w Doomie</h3>
+<ol>
+<li>Uruchom na radiu <b>OpenX6X00</b> (pierwszy system na liście) i sparuj w nim mysz i klawiaturę:
+  <b>Settings → Bluetooth → DEVICES</b>.</li>
+<li>Wyłącz radio i uruchom Dooma.</li>
+<li>Rusz myszą albo wciśnij klawisz; połączą się same w ciągu około minuty.</li>
+</ol>
+
+<h3>Klawisze</h3>
+<table>
+<tr><th></th><th>Emulator NES</th><th>Doom</th></tr>
+<tr><td>Ruch</td><td>strzałki albo WASD</td><td>W/S przód/tył, A/D w bok, strzałki</td></tr>
+<tr><td>Akcja</td><td><kbd>X</kbd> = A, <kbd>Z</kbd> = B</td><td><kbd>Ctrl</kbd> strzał, spacja drzwi</td></tr>
+<tr><td>Start / Select</td><td><kbd>Enter</kbd> / <kbd>Shift</kbd></td><td>–</td></tr>
+<tr><td>Menu</td><td><kbd>Esc</kbd></td><td><kbd>Esc</kbd></td></tr>
+<tr><td>Zapis / wczytanie</td><td><kbd>F2</kbd> / <kbd>F4</kbd></td><td><kbd>F2</kbd> / <kbd>F3</kbd></td></tr>
+<tr><td>Mysz</td><td>pistolet Zapper (np. Duck Hunt)</td><td>obrót, ruch, lewy = strzał, prawy = drzwi</td></tr>
+</table>
+</section>
+
+<section id="wifi">
+<h2>8. WiFi: gry przez przeglądarkę i aktualizacja</h2>
+<ol>
+<li>W menu emulatora wybierz kafelek <b>WiFi</b> → <b>Połącz z siecią</b>.</li>
+<li>Wybierz swoją sieć i wpisz hasło na klawiaturze ekranowej (gałka VFO lub MFK przesuwa po literach, wciśnięcie MFK albo <kbd>F1</kbd> wpisuje znak, <kbd>F2</kbd> kasuje, na końcu wybierz <b>OK</b>).
+  Hasło możesz też wpisać na klawiaturze USB/Bluetooth.</li>
+<li>Po połączeniu na ekranie pojawi się <b>kod QR</b> i adres, np. <code>http://192.168.0.112/</code>.</li>
+<li>Zeskanuj kod telefonem albo wpisz adres w przeglądarce komputera <b>w tej samej sieci</b>. Wpisz go z <code>http://</code>, nie <code>https://</code>.</li>
+<li>Na stronie: <b class="btn">+ Pliki</b> albo <b class="btn">+ Folder</b> dodaje gry do listy, <b class="btn">− Usuń</b> usuwa z listy,
+  a <b class="btn">Wgraj do emulatora</b> wysyła je do radia. Gry od razu są w <b>Liście gier</b>.</li>
+</ol>
+<p>Radio pamięta sieć i przy następnym starcie łączy się samo. Kod QR pokażesz ponownie w menu <b>WiFi</b>.</p>
+<h3>Aktualizacja emulatora</h3>
+<ol>
+<li><b>WiFi</b> → <b>Aktualizacja emulatora</b>. Radio sprawdzi, czy jest nowsza wersja, i ją pobierze.</li>
+<li>Po zapisie radio samo się wyłączy. Włącz je i uruchom emulator.</li>
+</ol>
+<div class="warn"><b>Nie wyłączaj radia w trakcie aktualizacji.</b> Gry i zapisy zostają.</div>
+</section>
+
+<section id="problemy">
+<h2>9. Gdy coś nie działa</h2>
+<table>
+<tr><th>Problem</th><th>Co zrobić</th></tr>
+<tr><td>Nie widać karty w aplikacji</td><td>Wyjmij i włóż kartę, poczekaj kilka sekund, kliknij <b class="btn">Odśwież</b>.</td></tr>
+<tr><td>Windows lub antywirus blokuje aplikację</td><td>„Więcej informacji” → „Uruchom mimo to”. Uruchamiaj ją z <b>rozpakowanego</b> folderu.</td></tr>
+<tr><td>Brak kafelków Doom / Emulator NES w Extras</td><td>Najpierw dodaj system z internetu (np. OpenX6X00).</td></tr>
+<tr><td>Radio nie startuje z karty</td><td>Wgraj kartę jeszcze raz ze sprawdzaniem. Spróbuj innej karty.</td></tr>
+<tr><td>Pad się nie paruje</td><td>Upewnij się, że miga szybko (tryb parowania), a nie wolno. Wyłącz konsolę lub komputer, z którym pad był wcześniej sparowany. Usuń go w <b>Bluetooth → Sparowane</b> i paruj od nowa.</td></tr>
+<tr><td>Strona z grami się nie otwiera</td><td>Adres z <code>http://</code>; telefon lub komputer w <b>tej samej</b> sieci WiFi co radio.</td></tr>
+<tr><td>Brak dźwięku lub trzeszczy</td><td>Pokręć gałką VOL. W Doomie zmniejsz <code>headphone=</code> w <code>doom.txt</code>.</td></tr>
+</table>
+<p><b>Zgłaszanie błędu:</b> dołącz plik <code>nes-log.txt</code> albo <code>doom-log.txt</code> z dysku <b>BOOT</b> karty,
+a dla aplikacji plik <code>Dokumenty/Xiegu Multi Patcher/log.txt</code> i zrzut ekranu.</p>
+</section>
+</main>
+</body>
+</html>

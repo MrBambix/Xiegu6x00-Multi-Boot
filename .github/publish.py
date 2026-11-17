@@ -21,8 +21,11 @@ MINE = sys.argv[1:]                       # this job's files: its app and the U-
 # on the repository's page; made of this build's own files only
 TEST = bool(re.search(r"-(test|beta|rc)", os.environ.get("GIVEN") or ""))
 # What a release holds; anything else in it (a file of an earlier way of packing, carried over) goes
-KNOWN = {"Xiegu-Multi-Patcher-Windows.zip", "Xiegu-Multi-Patcher-macOS.zip", "Xiegu-Multi-Patcher-Linux",
+KNOWN = {"Xiegu-Multi-Patcher-Windows.zip", "Xiegu-Multi-Patcher-macOS.zip", "Xiegu-Multi-Patcher-Linux.zip",
          "u-boot-x6100-menu.bin", "nes-x6100-rootfs.ext4.xz", "nes-x6100-rootfs.ext4.xz.sha256", "nes-version.txt"}
+
+# A former test version kept as a page with a link to the release (links to it went round): pruning leaves it
+MOVED = "<!-- moved-to-main -->"
 
 
 def gh(*args, check=True):
@@ -51,10 +54,13 @@ def notes(v):
 **Pobierz aplikację dla swojego komputera** (każda ma swój numer wersji):
 - Windows {v['windows']}: `Xiegu-Multi-Patcher-Windows.zip` (rozpakuj i uruchom `Xiegu Multi Patcher.exe` z folderu)
 - macOS {v['macos']}: `Xiegu-Multi-Patcher-macOS.zip` (rozpakuj; za pierwszym razem: Ustawienia systemowe → Prywatność i ochrona → Otwórz mimo to)
-- Linux {v['linux']}: `Xiegu-Multi-Patcher-Linux` (`chmod +x`; do zapisu karty potrzebny pkexec)
+- Linux {v['linux']}: `Xiegu-Multi-Patcher-Linux.zip` (rozpakuj i uruchom `Xiegu Multi Patcher` z folderu; do zapisu karty potrzebny pkexec)
+
+**Instrukcja krok po kroku** jest w każdej paczce: `INSTRUKCJA.html` (polski) i `INSTRUCTIONS.html` (English); otwórz ją w przeglądarce.
+**A step-by-step guide** is in every package: `INSTRUCTIONS.html` (English) and `INSTRUKCJA.html` (Polish); open it in a browser.
 
 Systemy radia (OpenX6X00, OpenX6100, CX8ANM, 1KO125, IU1WXY, R1CBU) pobierasz w aplikacji
-przyciskiem **+ Z internetu…**, prosto z wydań ich autorów. Instrukcja: README w repozytorium.
+przyciskiem **+ Z internetu…**, prosto z wydań ich autorów.
 
 W sekcji **Extras** aplikacji: klasyczny Doom na radiu (Freedoom), z dźwiękiem i muzyką na głośniku radia,
 myszą i klawiaturą USB albo Bluetooth.
@@ -119,6 +125,8 @@ def prune_tests(keep):
     r = gh("api", "repos/%s/releases?per_page=100" % REPO, check=False)
     tags = set()
     for rel in json.loads(r.stdout or "[]") if r.returncode == 0 else []:
+        if MOVED in (rel.get("body") or ""):
+            continue                      # a page that only points to the release (its link was shared)
         if rel.get("prerelease") and rel.get("tag_name") != keep:
             gh("api", "-X", "DELETE", "repos/%s/releases/%d" % (REPO, rel["id"]), check=False)
             tags.add(rel["tag_name"])
