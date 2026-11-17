@@ -873,7 +873,8 @@ static int nav_fast = 5;
 static bool quick_save, quick_load;
 static int menu_mouse;                      /* the mouse's way up and down, for the menus */
 static int menu_depth;                      /* a menu or a message on the screen (MFK pressed: OK) */
-static bool text_cap;                       /* a text being typed: the keyboard's letters kept */
+static bool text_cap;                       /* a text being typed: the keyboard's letters kept, and the
+                                             * VFO knob walks the keys one by one */
 static char typed[32];                      /* them, in order */
 static unsigned typed_n;
 static bool kb_shift;
@@ -1392,7 +1393,9 @@ static void knob(int axis, int value)
 		af_steps -= value;                    /* its encoder counts the other way: right is louder */
 		return;
 	}
-	if (axis == 0)                            /* VFO, MFK: the menus (VFO: a page of a long list) */
+	if (axis == 0 && text_cap)                /* the on-screen keyboard: VFO key by key */
+		nav_push(value > 0 ? N_RIGHT : N_LEFT);
+	else if (axis == 0)                       /* VFO, MFK: the menus (VFO: a page of a long list) */
 		nav_push(nav_pages ? (value > 0 ? N_PGDN : N_PGUP) : (value > 0 ? N_DOWN : N_UP));
 	else
 		nav_push(value > 0 ? N_UP : N_DOWN);
@@ -1635,6 +1638,14 @@ static void poll_input(void)
 			nav_push(N_OK);
 		else
 			want_menu = true;
+	}
+	uint32_t side = nb & (BIT(J_LEFT) | BIT(J_RIGHT));
+	static uint32_t side_at;
+	if (pressed & side)
+		side_at = t + 400;
+	else if (side && (int32_t)(t - side_at) >= 0) {
+		side_at = t + 90;
+		nav_push(side & BIT(J_LEFT) ? N_LEFT : N_RIGHT);
 	}
 	uint32_t dirs = nb & (BIT(J_UP) | BIT(J_DOWN));
 	if (pressed & dirs) {
@@ -4860,8 +4871,8 @@ static bool osk(const char *title, char *buf, size_t n)
 {
 	static const char *rows_lo[4] = {"1234567890", "qwertyuiop", "asdfghjkl-", "zxcvbnm_.@"};
 	static const char *rows_up[4] = {"1234567890", "QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM_.@"};
-	static const char *rows_sym[4] = {"!#$%&*()=+", "?/\\:;'\"<>,", "[]{}~^`|-_", ".@ €£§°±·"};
-	static const char *spec[5] = {"Aa", "#+", "␣", "⌫", "OK"};
+	static const char *rows_sym[4] = {"!#$%&*()=+", "?/\\:;'\"<>,", "[]{}~^`|-_", ".@0123456_"};
+	const char *spec[5] = {"Aa", "#+", T("spacja", "space"), T("usuń", "delete"), "OK"};
 	int r = 1, c = 0, layer = 0;
 	size_t len = strlen(buf);
 	bool dirty = true;
@@ -4886,8 +4897,8 @@ static bool osk(const char *title, char *buf, size_t n)
 			int cols = r == 4 ? 5 : 10;
 			if (k == N_UP) { r = (r + 4) % 5; }
 			else if (k == N_DOWN) { r = (r + 1) % 5; }
-			else if (k == N_LEFT) c = (c + cols - 1) % cols;
-			else if (k == N_RIGHT) c = (c + 1) % cols;
+			else if (k == N_LEFT) { if (--c < 0) { r = (r + 4) % 5; c = (r == 4 ? 5 : 10) - 1; } }
+			else if (k == N_RIGHT) { if (++c >= cols) { r = (r + 1) % 5; c = 0; } }
 			else if (k == N_BACK) { if (len) buf[--len] = 0; }
 			else if (k == N_MENU) done = true;
 			else if (k == N_OK) {
@@ -5146,6 +5157,12 @@ static void restore_kept_early(void) { restore_kept(); }
 
 static void wifi_menu(void)
 {
+	if (getenv("NES_TEST_OSK")) {
+		char pw[64] = "";
+		osk("Hasło: test", pw, sizeof pw);
+		logmsg("osk: typed '%s'", pw);
+		return;
+	}
 	int sel = 0;
 	for (;;) {
 		bool on = net_on();

@@ -156,11 +156,12 @@ def save_network():
     os.chmod(CONF, 0o600)
 
 
-def down():
+def down(quiet=False):
     run("killall", "udhcpc")
     run("killall", "wpa_supplicant")
     run("ip", "addr", "flush", "dev", IFACE)
-    say("net-state", "off")
+    if not quiet:                       # within up(): its state stays "busy" till the end
+        say("net-state", "off")
 
 
 def ip_of():
@@ -186,7 +187,7 @@ def up():
     log("up: network", ssid)
     say("net-state", "busy\t%s" % ssid)
     ensure_iface()
-    down()
+    down(quiet=True)
     run("ip", "link", "set", IFACE, "up")
     os.makedirs("/var/run/wpa_supplicant", exist_ok=True)
     r = run("wpa_supplicant", "-B", "-i", IFACE, "-c", CONF, "-D", "nl80211,wext")
@@ -204,7 +205,7 @@ def up():
         time.sleep(0.5)
     log("up: wpa_state", state)
     if state != "COMPLETED":
-        down()
+        down(quiet=True)
         say("net-state", "fail\t%s" % ("wrong password?" if state in ("4WAY_HANDSHAKE", "DISCONNECTED", "SCANNING") else
                                          state or "no answer"))
         return
