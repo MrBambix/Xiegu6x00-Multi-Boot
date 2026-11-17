@@ -19,6 +19,8 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# started by the emulator with no PATH of its own: the system's programs (ip, iw, wpa_supplicant) found
+os.environ["PATH"] = "/usr/sbin:/usr/bin:/sbin:/bin:" + os.environ.get("PATH", "")
 IFACE = "wlan0"
 CONF = "/nes-net/wifi.conf"
 GAMES = "/games"                     # the card's NES folder (BOOT)

@@ -3204,7 +3204,7 @@ static bool donor_chroot(void)
 	chroot_ready = true;
 	restore_kept_early();
 	if (access("/nes/net/wifi.conf", R_OK) == 0)    /* a network chosen before: on again */
-		run_chroot("exec /usr/bin/python3 /tmp/nes_net.py up >>/tmp/net.log 2>&1\n", "nes-net-up.sh", NULL, NULL);
+		run_chroot("export PATH=/usr/sbin:/usr/bin:/sbin:/bin; exec /usr/bin/python3 /tmp/nes_net.py up >>/tmp/net.log 2>&1\n", "nes-net-up.sh", NULL, NULL);
 	return true;
 }
 
@@ -4778,7 +4778,7 @@ static void games_tab(void)
 /* ------------------------------------------------------------------------------------------ */
 /* WiFi, the games' web page, the update over the air: nes_net.py in the lending system's root  */
 /* ------------------------------------------------------------------------------------------ */
-static const char net_sh[] = "exec /usr/bin/python3 /tmp/nes_net.py \"$1\" \"$2\" >>/tmp/net.log 2>&1\n";
+static const char net_sh[] = "export PATH=/usr/sbin:/usr/bin:/sbin:/bin; exec /usr/bin/python3 /tmp/nes_net.py \"$1\" \"$2\" >>/tmp/net.log 2>&1\n";
 
 static void net_run(const char *cmd, const char *arg)
 {
