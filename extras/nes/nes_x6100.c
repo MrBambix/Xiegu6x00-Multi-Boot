@@ -205,6 +205,7 @@ static void close_log(void)
 	if (log_fp) {
 		log_file("Bluetooth script", "/bt/tmp/nes-bt.log", 8000);
 		log_file("Sound (PulseAudio, pacat)", "/bt/tmp/nes-pa.log", 6000);
+		log_file("WiFi (nes_net.py)", "/bt/tmp/net.log", 6000);
 		log_file("input devices", "/proc/bus/input/devices", 12000);
 		log_dmesg();
 		logmsg("end");

@@ -45,11 +45,67 @@ def run(*cmd, timeout=30):
 # ---------------------------------------------------------------------------------------------
 # WiFi
 # ---------------------------------------------------------------------------------------------
-def scan():
-    run("ip", "link", "set", IFACE, "up")
+def log(*a):
+    with open("/tmp/net.log", "a") as f:
+        f.write(time.strftime("%H:%M:%S ") + " ".join(str(x) for x in a) + "\n")
+
+
+def scan_wpa():
+    """Looking through wpa_supplicant (works with the vendor's wext drivers as with nl80211):
+    {ssid: (signal, secure)}"""
     nets = {}
-    for _ in range(3):
-        out = run("iw", "dev", IFACE, "scan", timeout=20).stdout
+    os.makedirs("/var/run/wpa_supplicant", exist_ok=True)
+    if run("wpa_cli", "-i", IFACE, "ping").stdout.strip() != "PONG":
+        with open("/tmp/scan.conf", "w") as f:
+            f.write("ctrl_interface=/var/run/wpa_supplicant\nupdate_config=0\n")
+        r = run("wpa_supplicant", "-B", "-i", IFACE, "-c", "/tmp/scan.conf", "-D", "nl80211,wext")
+        log("scan: wpa_supplicant", r.returncode, (r.stderr or r.stdout).strip()[:200])
+        time.sleep(1)
+    for _ in range(4):
+        r = run("wpa_cli", "-i", IFACE, "scan")
+        log("scan: wpa_cli scan", r.stdout.strip()[:80])
+        time.sleep(4)
+        out = run("wpa_cli", "-i", IFACE, "scan_results").stdout
+        for line in out.splitlines()[1:]:
+            p = line.split("\t")
+            if len(p) >= 5 and p[4].strip():
+                try:
+                    sig = float(p[2])
+                except ValueError:
+                    sig = -90.0
+                if sig > 0:                 # some drivers give a quality 0..100
+                    sig = sig / 2 - 100
+                sec = "WPA" in p[3] or "WEP" in p[3] or "RSN" in p[3]
+                old = nets.get(p[4])
+                if not old or old[0] < sig:
+                    nets[p[4]] = (sig, sec)
+        if nets:
+            break
+    return nets
+
+
+def ensure_iface():
+    """The WiFi chip's driver loaded (with Bluetooth off nothing else loads it)"""
+    if os.path.exists("/sys/class/net/" + IFACE):
+        return
+    for mod in ("8723bu", "rtl8xxxu"):
+        r = run("modprobe", mod)
+        log("modprobe", mod, r.returncode, r.stderr.strip()[:120])
+        for _ in range(10):
+            if os.path.exists("/sys/class/net/" + IFACE):
+                return
+            time.sleep(0.5)
+
+
+def scan():
+    ensure_iface()
+    r = run("ip", "link", "set", IFACE, "up")
+    log("scan: link up", r.returncode, r.stderr.strip()[:120], "| ifaces:", " ".join(os.listdir("/sys/class/net")))
+    nets = {}
+    for _ in range(2):
+        rr = run("iw", "dev", IFACE, "scan", timeout=20)
+        out = rr.stdout
+        log("scan: iw", rr.returncode, rr.stderr.strip()[:160], "lines", len(out.splitlines()))
         ssid, sig, sec = None, -100.0, False
         for line in out.splitlines() + ["BSS end"]:
             line = line.strip()
@@ -71,6 +127,9 @@ def scan():
         if nets:
             break
         time.sleep(2)
+    if not nets:
+        nets = scan_wpa()
+    log("scan: found", len(nets))
     lines = ["%d\t%d\t%s" % (s, 1 if sec else 0, n) for n, (s, sec) in sorted(nets.items(), key=lambda x: -x[1][0])]
     say("net-scan", "\n".join(lines) if lines else "")
 
@@ -122,6 +181,7 @@ def up():
     if m:
         ssid = m.group(1)
     say("net-state", "busy\t%s" % ssid)
+    ensure_iface()
     down()
     run("ip", "link", "set", IFACE, "up")
     os.makedirs("/var/run/wpa_supplicant", exist_ok=True)
