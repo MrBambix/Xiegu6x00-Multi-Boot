@@ -273,7 +273,7 @@ class SourceSystem:
             m = re.match(r"setenv\s+(\w+)\s+(\S+)$", l)
             if m:
                 env[m.group(1)] = m.group(2).strip('"')
-            m = re.match(r"(?:fat|ext[24])?load\s+mmc\s+\S+\s+(\S+)\s+(\S+)", l)
+            m = re.search(r"(?:fat|ext[24])?load\s+mmc\s+\S+\s+(\S+)\s+([^;\s]+)", l)
             if m:
                 loads[m.group(1)] = m.group(2)
                 continue
