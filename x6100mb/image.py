@@ -244,6 +244,9 @@ class SourceSystem:
                 and "bootz 0x46000000 - 0x49000000" in script
             )
             if self.is_ab:
+                self.ab_env = fat.read_file("ab.env")
+                self.ab_bak = fat.read_file("ab.bak")
+                self.ab_script = make_script_image(self.script, "IU1WXY A/B boot")
                 self._parse_ab_script()
             else:
                 self._parse_script(fat)

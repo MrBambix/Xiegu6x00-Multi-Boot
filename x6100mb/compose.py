@@ -364,17 +364,36 @@ def menu_script(entries, default, timeout_s, title="X6100 MULTIBOOT", gfx=False,
                        "if fatload mmc 0:1 0x45100000 %s; then "
                        "if cmp.b 0x45000000 0x45100000 200; then setenv bm_same 1; "
                        "else mmc write 0x45100000 0 1; fi; fi; " % e["mbr"])
-            loads = ["fatload mmc 0:1 %s %s/ZIMAGE" % (s_.kernel_addr, d)]
-            if s_.fdt_file:
-                loads.append("fatload mmc 0:1 %s %s/BOARD.DTB" % (s_.fdt_addr, d))
-            if s_.initrd_file:
-                loads.append("fatload mmc 0:1 %s %s/INITRD" % (s_.initrd_addr, d))
-            boot = "%s %s %s %s" % (s_.boot_cmd, s_.kernel_addr, s_.initrd_addr or "-", s_.fdt_addr or "")
-            cmd = (pre + 'setenv bootargs "%s"; ' % s_.bootargs_for(e["part"]) +
-                   "".join("if %s; then " % l for l in loads) + boot.strip() + "; " +
-                   "fi; " * len(loads) +
-                   'setenv stdout serial,vidconsole; echo "%s did not start"; sleep 3; setenv stdout serial'
-                   % _ascii(e["name"]))
+            if getattr(s_, "is_ab", False):
+                cmd = (
+                    pre +
+                    "if fatload mmc 0:1 ${scriptaddr} %s/IU1WXY.SCR; then "
+                    "source ${scriptaddr}; fi; "
+                    "setenv stdout serial,vidconsole; "
+                    "echo \"%s did not start\"; sleep 3; setenv stdout serial"
+                    % (d, _ascii(e["name"]))
+                )
+            else:
+                loads = ["fatload mmc 0:1 %s %s/ZIMAGE" % (s_.kernel_addr, d)]
+                if s_.fdt_file:
+                    loads.append("fatload mmc 0:1 %s %s/BOARD.DTB" % (s_.fdt_addr, d))
+                if s_.initrd_file:
+                    loads.append("fatload mmc 0:1 %s %s/INITRD" % (s_.initrd_addr, d))
+                boot = "%s %s %s %s" % (
+                    s_.boot_cmd,
+                    s_.kernel_addr,
+                    s_.initrd_addr or "-",
+                    s_.fdt_addr or "",
+                )
+                cmd = (
+                    pre +
+                    'setenv bootargs "%s"; ' % s_.bootargs_for(e["part"]) +
+                    "".join("if %s; then " % load for load in loads) +
+                    boot.strip() + "; " +
+                    "fi; " * len(loads) +
+                    'setenv stdout serial,vidconsole; echo "%s did not start"; sleep 3; setenv stdout serial'
+                    % _ascii(e["name"])
+                )
         assert "'" not in cmd
         a("setenv bm_boot%d '%s'" % (n, cmd))
     a("")
@@ -489,6 +508,15 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
             layout.append((entry, slot, ebr, start, sectors))
             lba = _up(start + sectors)
         ext_end = lba
+
+    for entry, slot, _ebr, start, sectors in layout:
+        if slot is not None:
+            entry.setdefault("ab_physical", {})[slot] = {
+                "start": start,
+                "sectors": sectors,
+                "type": entry["sys"].ab_slots[slot]["type"],
+            }
+
     data_lba = lba
     # Extras (Doom) have no DATA of their own: they see their donor's (its Bluetooth pairings)
     owners = [e for e in sd if getattr(e["sys"], "donor", None) is None]
@@ -519,7 +547,22 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
                 (0x0C, data_at, data_sectors, False),
                 (0x0F, ext_start, ext_end - ext_start, False) if ext_start else None]
     disk_id = random.getrandbits(32)
-    plan.add(0, Data(make_mbr(primary(active), disk_id)))
+    normal_mbr = make_mbr(primary(active), disk_id)
+    plan.add(0, Data(normal_mbr))
+
+    for e in sd:
+        if not getattr(e["sys"], "is_ab", False):
+            continue
+        a = e["ab_physical"]["a"]
+        b = e["ab_physical"]["b"]
+        e["mbr"] = e["dir"] + "/MBR.BIN"
+        e["mbr_data"] = make_mbr([
+            (0x0C, boot_lba, boot_size // SECTOR, True),
+            (a["type"], a["start"], a["sectors"], False),
+            (0x0C, active, data_sectors, False),
+            (b["type"], b["start"], b["sectors"], False),
+        ], disk_id)
+
     if n_data > 1:
         for k, e in enumerate(owners):
             e["mbr"] = e["dir"] + "/MBR.BIN"
@@ -641,7 +684,11 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
             "\r\nbluetooth=1\r\n").encode())
     for e in sd:
         s = e["sys"]
-        if not getattr(s, "is_ab", False):
+        if getattr(s, "is_ab", False):
+            fat.add_file("ab.env", s.ab_env)
+            fat.add_file("ab.bak", s.ab_bak)
+            fat.add_file(e["dir"] + "/IU1WXY.SCR", s.ab_script)
+        else:
             fat.add_file(e["dir"] + "/ZIMAGE", s.files["kernel"])
             if "fdt" in s.files:
                 fat.add_file(e["dir"] + "/BOARD.DTB", s.files["fdt"])
