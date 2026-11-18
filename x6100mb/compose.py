@@ -363,7 +363,7 @@ def menu_script(entries, default, timeout_s, title="X6100 MULTIBOOT", gfx=False,
                 pre = ("mmc dev 0; mmc read 0x45000000 0 1; "
                        "if fatload mmc 0:1 0x45100000 %s; then "
                        "if cmp.b 0x45000000 0x45100000 200; then setenv bm_same 1; "
-                       "else mmc write 0x45100000 0 1; fi; fi; " % e["mbr"])
+                       "else mmc write 0x45100000 0 1; fi; fi; mmc rescan; " % e["mbr"])
             if getattr(s_, "is_ab", False):
                 cmd = (
                     pre +
@@ -552,6 +552,8 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
 
     for e in sd:
         if not getattr(e["sys"], "is_ab", False):
+            e["mbr"] = e["dir"] + "/MBR.BIN"
+            e["mbr_data"] = normal_mbr
             continue
         a = e["ab_physical"]["a"]
         b = e["ab_physical"]["b"]
