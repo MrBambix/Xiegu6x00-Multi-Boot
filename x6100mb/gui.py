@@ -1108,14 +1108,17 @@ class App:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def _take_data(self, tmp, card=None):
+    def _take_data(self, tmp, card=None, keep=False):
         """Before the card is erased: its settings copied aside and kept as .zip files on the computer.
         Returns (what compose takes as data_files, a line for the user about it), or (None, None).
 
         A card made here with a DATA per system: every system's DATA, each to the system of the same
         name (else of the same project) on the new card, wherever it now stands in the menu. Any other
-        card: the DATA the computer shows, to the default system."""
-        if not self.keep_data.get():
+        card: the DATA the computer shows, to the default system.
+
+        Runs in a job's thread: keep (the "carry the settings over" box) is read on Tk's thread before,
+        since macOS's Tk refuses any call from another thread ("main thread is not in main loop")."""
+        if not keep:
             return None, None
         if self.data_src:                         # the user's own copy goes before the old card's
             files = backup.from_copy(self.data_src, os.path.join(tmp, "DATA"))
@@ -1186,12 +1189,12 @@ class App:
         if not path:
             return
         self._job(t("Zapis obrazu"), self._save_job, plan, path, self._all_settings(), self._card_in_reader(),
-                  steps=(["backup"] if self.keep_data.get() else []) + ["write", "verify"])
+                  self.keep_data.get(), steps=(["backup"] if self.keep_data.get() else []) + ["write", "verify"])
 
-    def _save_job(self, plan, path, settings, card=None):
+    def _save_job(self, plan, path, settings, card=None, keep=False):
         tmp = tempfile.mkdtemp(prefix="x6100mb-data-")
         try:
-            files, note = self._take_data(tmp, card)
+            files, note = self._take_data(tmp, card, keep)
             if files is not None:
                 plan = self._plan(data_files=files, settings=settings)
             write_image_file(plan, path, Progress(self._progress_cb))
@@ -1230,7 +1233,7 @@ class App:
         self._skip.clear()
         self._skip_file = None
         self._job(t("Zapis na kartę") if inproc else t("Zapis na kartę (uprawnienia administratora)"),
-                  self._card_job, plan, card, inproc, self._all_settings(), self.check_card.get(),
+                  self._card_job, plan, card, inproc, self._all_settings(), self.check_card.get(), self.keep_data.get(),
                   steps=(["backup"] if self.keep_data.get() else []) + ["prepare", "write", "sync"] +
                   (["verify"] if self.check_card.get() else []))
         self.panel.on_skip = self._skip_check
@@ -1244,11 +1247,11 @@ class App:
             except OSError:
                 pass
 
-    def _card_job(self, plan, card, inproc, settings, check=True):
+    def _card_job(self, plan, card, inproc, settings, check=True, keep=False):
         tmp = tempfile.mkdtemp(prefix="x6100mb-data-")
         os.chmod(tmp, 0o755)
         try:
-            files, note = self._take_data(tmp, card)
+            files, note = self._take_data(tmp, card, keep)
             if files is not None:
                 plan = self._plan(card_bytes=card["size"], data_files=files, settings=settings)
             for dirpath, _dirs, names in os.walk(tmp):       # the writer may run with other rights
