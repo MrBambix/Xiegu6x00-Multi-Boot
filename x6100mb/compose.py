@@ -450,9 +450,13 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
         gfx = menu_gfx.HAVE_PIL
 
     # Partition numbers and directories
+    physical_index = 0
     for i, e in enumerate(sd):
         e["dir"] = "SYS%d" % (i + 1)
-        e["part"] = 2 if i == 0 else 4 + i      # p2, then p5, p6, ...
+        # The first physical root is p2; following roots are p5, p6, ...
+        # An IU1WXY A/B entry consumes two physical root areas.
+        e["part"] = 2 if physical_index == 0 else 4 + physical_index
+        physical_index += 2 if getattr(e["sys"], "is_ab", False) else 1
     for e in sd:                                # an extra (Doom) learns where its kernel's system is
         donor = getattr(e["sys"], "donor", None)
         if donor is not None:
