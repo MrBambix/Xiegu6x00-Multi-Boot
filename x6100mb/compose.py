@@ -439,7 +439,7 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
         if donor is not None:
             e["sys"].donor_part = next((x["part"] for x in sd if x["sys"] is donor), None)
 
-    kernels = sum(sum(len(v) for v in e["sys"].files.values()) for e in sd)
+    kernels = sum(sum(len(v) for v in e["sys"].files.values()) for e in sd if not getattr(e["sys"], "is_ab", False))
     # the NES emulator's games go on BOOT (any computer sees it), with room for more and the saves
     nes = [e for e in sd if extra_of(e) == "nes"]
     games = nes_games([g for e in nes for g in e.get("games", [])])
@@ -453,20 +453,41 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
     lba = ALIGN                                       # 1 MiB
     boot_lba = lba
     lba += boot_size // SECTOR
-    layout = []                                       # (entry, ebr_lba or None, lba, sectors)
+    # Physical root filesystem areas. Ordinary systems have one area.
+    # IU1WXY 0.2.2+ keeps two complete A/B root slots while remaining one
+    # menu entry. Slot A may occupy the primary p2 area when IU1WXY is first;
+    # all following areas are placed behind the extended partition.
+    #
+    # Tuple: (entry, slot name or None, ebr_lba or None, start_lba, sectors)
+    layout = []
     first = sd[0]
-    s0 = first["sys"].root_size // SECTOR
-    layout.append((first, None, lba, s0))
-    lba = _up(lba + s0)
+
+    def root_areas(entry):
+        system = entry["sys"]
+        if getattr(system, "is_ab", False):
+            return [
+                ("a", system.ab_slots["a"]["size"] // SECTOR),
+                ("b", system.ab_slots["b"]["size"] // SECTOR),
+            ]
+        return [(None, system.root_size // SECTOR)]
+
+    physical = []
+    for entry in sd:
+        for slot, sectors in root_areas(entry):
+            physical.append((entry, slot, sectors))
+
+    first_entry, first_slot, first_sectors = physical[0]
+    layout.append((first_entry, first_slot, None, lba, first_sectors))
+    lba = _up(lba + first_sectors)
+
     ext_start = None
-    if len(sd) > 1:
+    if len(physical) > 1:
         ext_start = lba
-        for e in sd[1:]:
+        for entry, slot, sectors in physical[1:]:
             ebr = lba
             start = ebr + ALIGN
-            n = e["sys"].root_size // SECTOR
-            layout.append((e, ebr, start, n))
-            lba = _up(start + n)
+            layout.append((entry, slot, ebr, start, sectors))
+            lba = _up(start + sectors)
         ext_end = lba
     data_lba = lba
     # Extras (Doom) have no DATA of their own: they see their donor's (its Bluetooth pairings)
@@ -494,7 +515,7 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
     # MBR, the gap up to U-Boot cleared (an old GPT header lives there), U-Boot
     def primary(data_at):
         return [(0x0C, boot_lba, boot_size // SECTOR, True),
-                (first["sys"].root_type, layout[0][2], layout[0][3], False),
+                (first["sys"].root_type, layout[0][3], layout[0][4], False),
                 (0x0C, data_at, data_sectors, False),
                 (0x0F, ext_start, ext_end - ext_start, False) if ext_start else None]
     disk_id = random.getrandbits(32)
@@ -511,17 +532,41 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
 
     # Extended partition: each EBR points at its partition and the next EBR
     for k in range(1, len(layout)):
-        e, ebr, start, n = layout[k]
+        e, slot, ebr, start, n = layout[k]
         nxt = layout[k + 1] if k + 1 < len(layout) else None
-        plan.add(ebr * SECTOR, Data(make_ebr(e["sys"].root_type, start - ebr, n,
-                                             None if nxt is None else nxt[1] - ext_start,
-                                             0 if nxt is None else (nxt[2] + nxt[3] - nxt[1]))))
+        part_type = (
+            e["sys"].ab_slots[slot]["type"]
+            if slot is not None
+            else e["sys"].root_type
+        )
+        plan.add(
+            ebr * SECTOR,
+            Data(
+                make_ebr(
+                    part_type,
+                    start - ebr,
+                    n,
+                    None if nxt is None else nxt[2] - ext_start,
+                    0 if nxt is None else (nxt[3] + nxt[4] - nxt[2]),
+                )
+            ),
+        )
         plan.add((ebr + 1) * SECTOR, Zero((start - ebr - 1) * SECTOR))
 
-    # Root filesystems, byte for byte
-    for e, _ebr, start, n in layout:
-        s = e["sys"]
-        plan.add(start * SECTOR, FileRange(s.raw, s.root_offset, s.root_size))
+    # Root filesystems, byte for byte. IU1WXY contributes both A and B.
+    for e, slot, _ebr, start, n in layout:
+        system = e["sys"]
+        if slot is not None:
+            source = system.ab_slots[slot]
+            plan.add(
+                start * SECTOR,
+                FileRange(system.raw, source["offset"], source["size"]),
+            )
+        else:
+            plan.add(
+                start * SECTOR,
+                FileRange(system.raw, system.root_offset, system.root_size),
+            )
 
     # BOOT
     script = menu_script(entries, default, timeout_s, gfx=gfx, ansi=screen, wait=wait)
@@ -596,11 +641,12 @@ def compose(entries, default=0, timeout_s=5, data_mb=1024, card_bytes=None, uboo
             "\r\nbluetooth=1\r\n").encode())
     for e in sd:
         s = e["sys"]
-        fat.add_file(e["dir"] + "/ZIMAGE", s.files["kernel"])
-        if "fdt" in s.files:
-            fat.add_file(e["dir"] + "/BOARD.DTB", s.files["fdt"])
-        if "initrd" in s.files:
-            fat.add_file(e["dir"] + "/INITRD", s.files["initrd"])
+        if not getattr(s, "is_ab", False):
+            fat.add_file(e["dir"] + "/ZIMAGE", s.files["kernel"])
+            if "fdt" in s.files:
+                fat.add_file(e["dir"] + "/BOARD.DTB", s.files["fdt"])
+            if "initrd" in s.files:
+                fat.add_file(e["dir"] + "/INITRD", s.files["initrd"])
         if e.get("mbr_data"):
             fat.add_file(e["mbr"], e["mbr_data"])
     for off, piece in fat.extents():
